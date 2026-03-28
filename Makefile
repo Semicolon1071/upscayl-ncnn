@@ -15,7 +15,7 @@ NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 # --- Configurable variables (override via .env or CLI) ---
 BUILD_DIR     ?= build
 BUILD_TYPE    ?= Release
-CMAKE_SRC_DIR ?= src
+CMAKE_SRC_DIR ?= .
 PARALLEL_JOBS ?= $(NPROC)
 VK_VERSION    ?= 1.3.280.0
 
@@ -90,7 +90,7 @@ CMAKE_FLAGS += $(CMAKE_EXTRA_FLAGS)
 
 .DEFAULT_GOAL := build
 .PHONY: help info check install-deps install-vulkan-sdk submodules configure build \
-        test-file test-folder clean
+        test-file test-folder unit-test clean
 
 help:
 	@echo "Upscayl NCNN build targets:"
@@ -107,6 +107,7 @@ help:
 	@echo "  make build        Configure and build"
 	@echo "  make test-file    Upscale a single test image"
 	@echo "  make test-folder  Upscale a folder of test images"
+	@echo "  make unit-test    Build and run Catch2 unit tests"
 	@echo "  make clean        Remove build directory"
 	@echo ""
 	@echo "Override variables via CLI or .env file (see .env.example):"
@@ -350,6 +351,12 @@ test-folder: build
 	fi
 	@mkdir -p images_out
 	time $(BINARY) -i ./images/ -o ./images_out/ -s 4 -m models/ -n realesrgan-x4plus
+
+unit-test: check submodules
+	@mkdir -p $(BUILD_DIR)
+	cd $(BUILD_DIR) && cmake $(CMAKE_FLAGS) -DBUILD_TESTS=ON ../$(CMAKE_SRC_DIR)
+	cmake --build $(BUILD_DIR) -j $(PARALLEL_JOBS) --target upscayl-tests
+	cd $(BUILD_DIR) && ctest --output-on-failure
 
 # --- Clean ---
 

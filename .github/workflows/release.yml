@@ -158,7 +158,7 @@ jobs:
         run: |
           $env:VULKAN_SDK="$(pwd)/VulkanSDK"
           mkdir build; cd build
-          cmake -A x64 ../src
+          cmake -A x64 ..
           cmake --build . --config Release
 
       - name: Package

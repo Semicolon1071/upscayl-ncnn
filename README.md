@@ -88,11 +88,22 @@ make build BUILD_DIR=build-arm64 ARCH=arm64
 | `make build` | Configure and build |
 | `make test-file` | Upscale a single test image |
 | `make test-folder` | Upscale a folder of test images |
+| `make unit-test` | Build and run Catch2 unit tests |
 | `make clean` | Remove build directory |
 | `make info` | Print detected platform, compilers, paths |
 | `make help` | Show all targets |
 
 ## Testing
+
+### Unit Tests
+
+```bash
+make unit-test
+```
+
+This builds and runs the Catch2 unit test suite. No GPU or model files required. Tests are built with `-DBUILD_TESTS=ON` and executed via CTest.
+
+### Integration Tests
 
 Place model files (`.param` and `.bin`) in the `models/` directory, then:
 
@@ -118,7 +129,7 @@ If you prefer raw cmake:
 ```bash
 git submodule update --init --recursive
 mkdir build && cd build
-cmake ../src                          # add platform flags as needed
+cmake ..                              # add platform flags as needed
 cmake --build . -j $(nproc)
 ```
 
