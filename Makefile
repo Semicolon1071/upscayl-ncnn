@@ -38,7 +38,7 @@ endif
 CMAKE_EXTRA_FLAGS ?=
 
 # --- Binary ---
-BINARY := $(BUILD_DIR)/upscayl-bin
+BINARY := $(BUILD_DIR)/src/upscayl-bin
 
 # --- CMake flag assembly ---
 CMAKE_FLAGS := \
@@ -90,7 +90,7 @@ CMAKE_FLAGS += $(CMAKE_EXTRA_FLAGS)
 
 .DEFAULT_GOAL := build
 .PHONY: help info check install-deps install-vulkan-sdk submodules configure build \
-        test-file test-folder unit-test clean
+        test-file test-folder unit-test sanitize-test integration-test clean
 
 help:
 	@echo "Upscayl NCNN build targets:"
@@ -108,6 +108,8 @@ help:
 	@echo "  make test-file    Upscale a single test image"
 	@echo "  make test-folder  Upscale a folder of test images"
 	@echo "  make unit-test    Build and run Catch2 unit tests"
+	@echo "  make integration-test  Run CLI integration tests (no GPU needed)"
+	@echo "  make sanitize-test  Build and run tests with AddressSanitizer and UBSan"
 	@echo "  make clean        Remove build directory"
 	@echo ""
 	@echo "Override variables via CLI or .env file (see .env.example):"
@@ -355,8 +357,22 @@ test-folder: build
 unit-test: check submodules
 	@mkdir -p $(BUILD_DIR)
 	cd $(BUILD_DIR) && cmake $(CMAKE_FLAGS) -DBUILD_TESTS=ON ../$(CMAKE_SRC_DIR)
-	cmake --build $(BUILD_DIR) -j $(PARALLEL_JOBS) --target upscayl-tests
+	cmake --build $(BUILD_DIR) -j $(PARALLEL_JOBS) --target upscayl-tests --target upscayl-codec-tests
 	cd $(BUILD_DIR) && ctest --output-on-failure
+
+integration-test: build
+	UPSCAYL_BIN=$(BINARY) python3 tests/test_cli_integration.py
+
+sanitize-test: check submodules
+	@mkdir -p $(BUILD_DIR)-sanitize
+	cd $(BUILD_DIR)-sanitize && cmake $(CMAKE_FLAGS) \
+	    -DBUILD_TESTS=ON \
+	    -DENABLE_ASAN=ON \
+	    -DENABLE_UBSAN=ON \
+	    -DCMAKE_BUILD_TYPE=Debug \
+	    ../$(CMAKE_SRC_DIR)
+	cmake --build $(BUILD_DIR)-sanitize -j $(PARALLEL_JOBS) --target upscayl-tests --target upscayl-codec-tests
+	cd $(BUILD_DIR)-sanitize && ctest --output-on-failure
 
 # --- Clean ---
 

@@ -89,6 +89,8 @@ make build BUILD_DIR=build-arm64 ARCH=arm64
 | `make test-file` | Upscale a single test image |
 | `make test-folder` | Upscale a folder of test images |
 | `make unit-test` | Build and run Catch2 unit tests |
+| `make integration-test` | Run CLI integration tests (no GPU needed) |
+| `make sanitize-test` | Build and run tests with AddressSanitizer and UBSan |
 | `make clean` | Remove build directory |
 | `make info` | Print detected platform, compilers, paths |
 | `make help` | Show all targets |
@@ -101,9 +103,25 @@ make build BUILD_DIR=build-arm64 ARCH=arm64
 make unit-test
 ```
 
-This builds and runs the Catch2 unit test suite. No GPU or model files required. Tests are built with `-DBUILD_TESTS=ON` and executed via CTest.
+Builds and runs the Catch2 unit test suite (filesystem utilities, image utils, codec round-trips). No GPU or model files required. Tests are built with `-DBUILD_TESTS=ON` and executed via CTest.
 
-### Integration Tests
+### CLI Integration Tests
+
+```bash
+make integration-test
+```
+
+Runs Python-based tests that exercise the compiled binary's argument validation and error handling. No GPU required — tests cover argument parsing paths that exit before GPU initialization.
+
+### Sanitizer Tests
+
+```bash
+make sanitize-test
+```
+
+Builds and runs the unit tests with AddressSanitizer and UndefinedBehaviorSanitizer enabled (Debug build). Useful for catching memory errors and undefined behavior. Requires `libasan` to be installed (available by default on Ubuntu; install `libasan` on Fedora).
+
+### Manual GPU Tests
 
 Place model files (`.param` and `.bin`) in the `models/` directory, then:
 

@@ -29,15 +29,7 @@ namespace fs = std::filesystem;
 #define STB_IMAGE_RESIZE2_IMPLEMENTATION
 #include "stb_image_resize2.h"
 
-static const char *resizemodes[] = {
-    "default",      // STBIR_FILTER_DEFAULT
-    "box",          // STBIR_FILTER_BOX
-    "triangle",     // STBIR_FILTER_TRIANGLE
-    "cubicbspline", // STBIR_FILTER_CUBICBSPLINE
-    "catmullrom",   // STBIR_FILTER_CATMULLROM
-    "mitchell",     // STBIR_FILTER_MITCHELL
-    "pointsample"   // STBIR_FILTER_POINT_SAMPLE
-};
+#include "image_utils.h"
 
 #if _WIN32
 #include <wchar.h>
@@ -111,9 +103,9 @@ static bool parse_optarg_resize(const wchar_t *optarg, int *width, int *height, 
     {
         bool found = false;
         const wchar_t *modestr = colon + 1;
-        for (int i = 0; i < (int)(sizeof(resizemodes) / sizeof(resizemodes[0])); i++)
+        for (int i = 0; i < resize_mode_count; i++)
         {
-            if (ascii_string_equals(modestr, resizemodes[i]))
+            if (ascii_string_equals(modestr, resize_mode_names[i]))
             {
                 *mode = i;
                 found = true;
@@ -140,49 +132,22 @@ static bool parse_optarg_resize(const wchar_t *optarg, int *width, int *height, 
 
 static std::vector<int> parse_optarg_int_array(const char *optarg)
 {
-    std::vector<int> array;
-    array.push_back(atoi(optarg));
-
-    const char *p = strchr(optarg, ',');
-    while (p)
-    {
-        p++;
-        array.push_back(atoi(p));
-        p = strchr(p, ',');
-    }
-
-    return array;
+    return parse_int_array(optarg);
 }
 
 static bool parse_optarg_resize(const char *optarg, int *width, int *height, int *mode, bool hasCustomWidth = false)
 {
-    *mode = 0; // default
-
-    const char *colon = strchr(optarg, ':');
-    if (colon)
+    if (!parse_resize_spec(optarg, width, height, mode, hasCustomWidth))
     {
-        bool found = false;
-        const char *modestr = colon + 1;
-        for (int i = 0; i < (int)(sizeof(resizemodes) / sizeof(resizemodes[0])); i++)
+        if (!hasCustomWidth)
         {
-            if (strcmp(modestr, resizemodes[i]) == 0)
-            {
-                *mode = i;
-                found = true;
-                break;
-            }
+            const char *colon = strchr(optarg, ':');
+            if (colon)
+                fprintf(stderr, "🚨 Error: Invalid resize mode '%s'\n", colon + 1);
         }
-        if (!found)
-        {
-            fprintf(stderr, "🚨 Error: Invalid resize mode '%s'\n", modestr);
-            return false;
-        }
+        return false;
     }
-    if (hasCustomWidth)
-    {
-        return sscanf(optarg, "%d", width) == 1;
-    }
-    return sscanf(optarg, "%dx%d", width, height) == 2;
+    return true;
 }
 
 #endif // _WIN32
@@ -529,7 +494,7 @@ void resize_output_image(Task &v, const SaveThreadParams *stp)
     // Calculate the resize height if not provided
     if (hasCustomWidth)
     {
-        resizeHeight = (v.inimage.h * resizeWidth) / v.inimage.w;
+        resizeHeight = calculate_proportional_height(v.inimage.w, v.inimage.h, resizeWidth);
 #if _WIN32
         fwprintf(stderr, L"🧮 Calculated height from width: %d\n", resizeHeight);
 #else  // _WIN32
@@ -788,13 +753,12 @@ int main(int argc, char **argv)
             hasOutputScale = true;
             break;
         case L'c':
-            compression = _wtof(optarg);
-            if (compression < 0 || compression > 100)
+            compression = validate_and_round_compression(_wtof(optarg));
+            if (compression < 0)
             {
                 fwprintf(stderr, L"🚨 Error: Invalid compression value, it should be between 0 and 100!\n");
                 return -1;
             }
-            compression = round(compression / 10.0) * 10;
             break;
         case L'r':
             if (wcscmp(optarg, L"help") == 0)
@@ -874,13 +838,12 @@ int main(int argc, char **argv)
             hasOutputScale = true;
             break;
         case 'c':
-            compression = atof(optarg);
-            if (compression < 0 || compression > 100)
+            compression = validate_and_round_compression(atof(optarg));
+            if (compression < 0)
             {
                 fprintf(stderr, "🚨 Error: Invalid compression value, it should be between 0 and 100!\n");
                 return -1;
             }
-            compression = round(compression / 10.0) * 10;
             break;
         case 'r':
             if (strcmp(optarg, "help") == 0)
@@ -1109,35 +1072,11 @@ int main(int argc, char **argv)
     char modelpath[256];
 
     // Check if modelname includes scale
-    if (modelname.find(PATHSTR("x1")) != path_t::npos || modelname.find(PATHSTR("1x")) != path_t::npos)
+    int detected_scale = detect_scale_from_model_name(modelname);
+    if (detected_scale != 0)
     {
-        fprintf(stderr, "✨ Detected scale x1\n");
-        scale = 1;
-    }
-    else if (modelname.find(PATHSTR("x2")) != path_t::npos || modelname.find(PATHSTR("2x")) != path_t::npos)
-    {
-        fprintf(stderr, "✨ Detected scale x2\n");
-        scale = 2;
-    }
-    else if (modelname.find(PATHSTR("x3")) != path_t::npos || modelname.find(PATHSTR("3x")) != path_t::npos)
-    {
-        fprintf(stderr, "✨ Detected scale x3\n");
-        scale = 3;
-    }
-    else if (modelname.find(PATHSTR("x4")) != path_t::npos || modelname.find(PATHSTR("4x")) != path_t::npos)
-    {
-        fprintf(stderr, "✨ Detected scale x4\n");
-        scale = 4;
-    }
-    else if (modelname.find(PATHSTR("x8")) != path_t::npos || modelname.find(PATHSTR("8x")) != path_t::npos)
-    {
-        fprintf(stderr, "✨ Detected scale x8\n");
-        scale = 8;
-    }
-    else if (modelname.find(PATHSTR("x16")) != path_t::npos || modelname.find(PATHSTR("16x")) != path_t::npos)
-    {
-        fprintf(stderr, "✨ Detected scale x16\n");
-        scale = 16;
+        scale = detected_scale;
+        fprintf(stderr, "✨ Detected scale x%d\n", scale);
     }
 
     if (scale == 4)

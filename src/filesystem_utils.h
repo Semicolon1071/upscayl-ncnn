@@ -28,7 +28,7 @@ typedef std::string path_t;
 #define PATHSTR(X) X
 #endif
 
-bool is_image_file(const std::string &filename)
+static bool is_image_file(const std::string &filename)
 {
     const std::vector<std::string> extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"};
 
@@ -176,9 +176,14 @@ static path_t get_executable_directory()
 static path_t get_executable_directory()
 {
     char filepath[256];
-    readlink("/proc/self/exe", filepath, 256);
+    ssize_t len = readlink("/proc/self/exe", filepath, sizeof(filepath) - 1);
+    if (len == -1)
+        return path_t();
+    filepath[len] = '\0';
 
     char *slash = strrchr(filepath, '/');
+    if (!slash)
+        return path_t();
     slash[1] = '\0';
 
     return path_t(filepath);
