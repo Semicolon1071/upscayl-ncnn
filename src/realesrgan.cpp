@@ -70,14 +70,23 @@ RealESRGAN::~RealESRGAN()
         delete realesrgan_postproc;
     }
 
-    bicubic_2x->destroy_pipeline(net.opt);
-    delete bicubic_2x;
+    if (bicubic_2x)
+    {
+        bicubic_2x->destroy_pipeline(net.opt);
+        delete bicubic_2x;
+    }
 
-    bicubic_3x->destroy_pipeline(net.opt);
-    delete bicubic_3x;
+    if (bicubic_3x)
+    {
+        bicubic_3x->destroy_pipeline(net.opt);
+        delete bicubic_3x;
+    }
 
-    bicubic_4x->destroy_pipeline(net.opt);
-    delete bicubic_4x;
+    if (bicubic_4x)
+    {
+        bicubic_4x->destroy_pipeline(net.opt);
+        delete bicubic_4x;
+    }
 }
 
 #if _WIN32
@@ -92,6 +101,7 @@ int RealESRGAN::load(const std::string &parampath, const std::string &modelpath)
         if (!fp)
         {
             fwprintf(stderr, L"🚨 Error: Failed to open %ls\n", parampath.c_str());
+            return -1;
         }
 
         net.load_param(fp);
@@ -103,6 +113,7 @@ int RealESRGAN::load(const std::string &parampath, const std::string &modelpath)
         if (!fp)
         {
             fwprintf(stderr, L"🚨 Error: Failed to open %ls\n", modelpath.c_str());
+            return -1;
         }
 
         net.load_model(fp);

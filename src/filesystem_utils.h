@@ -113,8 +113,17 @@ static int list_directory(const path_t &dirpath, std::vector<path_t> &imagepaths
     struct dirent *ent = 0;
     while ((ent = readdir(dir)))
     {
-        if (ent->d_type != DT_REG)
+        if (ent->d_type != DT_REG && ent->d_type != DT_LNK && ent->d_type != DT_UNKNOWN)
             continue;
+
+        // For symlinks and unknown types, verify it's a regular file via stat
+        if (ent->d_type == DT_LNK || ent->d_type == DT_UNKNOWN)
+        {
+            std::string fullpath = std::string(dirpath) + "/" + ent->d_name;
+            struct stat s;
+            if (stat(fullpath.c_str(), &s) != 0 || !S_ISREG(s.st_mode))
+                continue;
+        }
 
         std::string filename(ent->d_name);
 

@@ -300,11 +300,16 @@ void *load(void *args)
         {
             // read whole file
             unsigned char *filedata = 0;
-            int length = 0;
+            long length = 0;
             {
                 fseek(fp, 0, SEEK_END);
                 length = ftell(fp);
                 rewind(fp);
+                if (length <= 0)
+                {
+                    fclose(fp);
+                    continue;
+                }
                 filedata = (unsigned char *)malloc(length);
                 if (filedata)
                 {
@@ -451,7 +456,11 @@ void *proc(void *args)
         if (v.id == -233)
             break;
 
-        realesrgan->process(v.inimage, v.outimage);
+        int ret = realesrgan->process(v.inimage, v.outimage);
+        if (ret != 0)
+        {
+            fprintf(stderr, "🚨 Error: Failed to process image (id=%d)\n", v.id);
+        }
 
         tosave.put(v);
     }
@@ -510,10 +519,15 @@ void resize_output_image(Task &v, const SaveThreadParams *stp)
 
     int c = v.outimage.elempack;
 
-    stbir_pixel_layout layout = static_cast<stbir_pixel_layout>(c);
+    stbir_pixel_layout layout = (c == 4) ? STBIR_RGBA : STBIR_RGB;
 
     // Create a new buffer for the resized image
-    unsigned char *resizedData = (unsigned char *)malloc(resizeWidth * resizeHeight * c);
+    unsigned char *resizedData = (unsigned char *)malloc((size_t)resizeWidth * resizeHeight * c);
+    if (!resizedData)
+    {
+        fprintf(stderr, "🚨 Error: Failed to allocate memory for resized image (%dx%d)\n", resizeWidth, resizeHeight);
+        return;
+    }
 
     // Resize the image using stb_image_resize
     stbir_resize_uint8_srgb((unsigned char *)v.outimage.data, v.outimage.w, v.outimage.h, 0, resizedData, resizeWidth, resizeHeight, 0, layout);
@@ -557,9 +571,14 @@ void scale_output_image(Task &v, const SaveThreadParams *stp)
     fprintf(stderr, "🏞️ Resizing image according to output scale\n");
 #endif // _WIN32
 
-    stbir_pixel_layout layout = static_cast<stbir_pixel_layout>(c);
+    stbir_pixel_layout layout = (c == 4) ? STBIR_RGBA : STBIR_RGB;
     // Create a new buffer for the resized image
-    unsigned char *resizedData = (unsigned char *)malloc(outputWidth * outputHeight * c);
+    unsigned char *resizedData = (unsigned char *)malloc((size_t)outputWidth * outputHeight * c);
+    if (!resizedData)
+    {
+        fprintf(stderr, "🚨 Error: Failed to allocate memory for scaled image (%dx%d)\n", outputWidth, outputHeight);
+        return;
+    }
     stbir_resize_uint8_srgb((unsigned char *)v.outimage.data, v.outimage.w, v.outimage.h, 0, resizedData, outputWidth, outputHeight, 0, layout);
     
     // Free the old output image data only if it was malloc'd
@@ -633,8 +652,17 @@ void *save(void *args)
 
         if (!fs::exists(parent_path))
         {
+#if _WIN32
+            fwprintf(stderr, L"📂 Creating directory: %ls\n", parent_path.c_str());
+#else
             fprintf(stderr, "📂 Creating directory: %s\n", parent_path.c_str());
-            fs::create_directories(parent_path);
+#endif
+            std::error_code ec;
+            fs::create_directories(parent_path, ec);
+            if (ec)
+            {
+                fprintf(stderr, "🚨 Error: Failed to create directory: %s\n", ec.message().c_str());
+            }
         }
 
         if (ext == PATHSTR("webp") || ext == PATHSTR("WEBP"))
@@ -713,9 +741,9 @@ int main(int argc, char **argv)
     path_t inputpath;
     path_t outputpath;
     int scale = 4;
-    int resizeWidth;
-    int resizeHeight;
-    int resizeMode;
+    int resizeWidth = 0;
+    int resizeHeight = 0;
+    int resizeMode = 0;
     int outputScale = 4;
     bool hasOutputScale = false;
     float compression = 0.00f;
@@ -733,7 +761,6 @@ int main(int argc, char **argv)
     path_t format = PATHSTR("png");
 
 #if _WIN32
-    setlocale(LC_ALL, "");
     wchar_t opt;
     while ((opt = getopt(argc, argv, L"i:o:z:s:r:w:t:c:m:n:g:j:f:vxh")) != (wchar_t)-1)
     {
@@ -799,9 +826,17 @@ int main(int argc, char **argv)
             gpuid = parse_optarg_int_array(optarg);
             break;
         case L'j':
+        {
+            const wchar_t *colon = wcschr(optarg, L':');
+            if (!colon)
+            {
+                fwprintf(stderr, L"🚨 Error: Invalid -j format. Expected load:proc:save (e.g. 1:2:2)\n");
+                return -1;
+            }
             swscanf(optarg, L"%d:%*[^:]:%d", &jobs_load, &jobs_save);
-            jobs_proc = parse_optarg_int_array(wcschr(optarg, L':') + 1);
+            jobs_proc = parse_optarg_int_array(colon + 1);
             break;
+        }
         case L'f':
             format = optarg;
             break;
@@ -884,9 +919,17 @@ int main(int argc, char **argv)
             gpuid = parse_optarg_int_array(optarg);
             break;
         case 'j':
+        {
+            const char *colon = strchr(optarg, ':');
+            if (!colon)
+            {
+                fprintf(stderr, "🚨 Error: Invalid -j format. Expected load:proc:save (e.g. 1:2:2)\n");
+                return -1;
+            }
             sscanf(optarg, "%d:%*[^:]:%d", &jobs_load, &jobs_save);
-            jobs_proc = parse_optarg_int_array(strchr(optarg, ':') + 1);
+            jobs_proc = parse_optarg_int_array(colon + 1);
             break;
+        }
         case 'f':
             format = optarg;
             break;
@@ -1056,10 +1099,26 @@ int main(int argc, char **argv)
     wchar_t parampath[256];
     wchar_t modelpath[256];
 
+    // Detect scale from model name (convert wstring to string for detection)
+    {
+        std::string narrow_modelname(modelname.begin(), modelname.end());
+        int detected_scale = detect_scale_from_model_name(narrow_modelname);
+        if (detected_scale != 0)
+        {
+            scale = detected_scale;
+            fwprintf(stderr, L"✨ Detected scale x%d\n", scale);
+        }
+
+        if (scale == 4)
+        {
+            fwprintf(stderr, L"✨ Using the default scale x4\n");
+        }
+    }
+
     if (modelname == PATHSTR("realesr-animevideov3"))
     {
-        swprintf(parampath, 256, L"%s/%s-x%s.param", model.c_str(), modelname.c_str(), std::to_string(scale));
-        swprintf(modelpath, 256, L"%s/%s-x%s.bin", model.c_str(), modelname.c_str(), std::to_string(scale));
+        swprintf(parampath, 256, L"%s/%s-x%s.param", model.c_str(), modelname.c_str(), std::to_wstring(scale).c_str());
+        swprintf(modelpath, 256, L"%s/%s-x%s.bin", model.c_str(), modelname.c_str(), std::to_wstring(scale).c_str());
     }
     else
     {
@@ -1086,13 +1145,13 @@ int main(int argc, char **argv)
 
     if (modelname == PATHSTR("realesr-animevideov3"))
     {
-        sprintf(parampath, "%s/%s-x%s.param", model.c_str(), modelname.c_str(), std::to_string(scale).c_str());
-        sprintf(modelpath, "%s/%s-x%s.bin", model.c_str(), modelname.c_str(), std::to_string(scale).c_str());
+        snprintf(parampath, sizeof(parampath), "%s/%s-x%s.param", model.c_str(), modelname.c_str(), std::to_string(scale).c_str());
+        snprintf(modelpath, sizeof(modelpath), "%s/%s-x%s.bin", model.c_str(), modelname.c_str(), std::to_string(scale).c_str());
     }
     else
     {
-        sprintf(parampath, "%s/%s.param", model.c_str(), modelname.c_str());
-        sprintf(modelpath, "%s/%s.bin", model.c_str(), modelname.c_str());
+        snprintf(parampath, sizeof(parampath), "%s/%s.param", model.c_str(), modelname.c_str());
+        snprintf(modelpath, sizeof(modelpath), "%s/%s.bin", model.c_str(), modelname.c_str());
     }
 #endif
 
@@ -1174,7 +1233,16 @@ int main(int argc, char **argv)
         {
             realesrgan[i] = new RealESRGAN(gpuid[i], tta_mode);
 
-            realesrgan[i]->load(paramfullpath, modelfullpath);
+            int load_ret = realesrgan[i]->load(paramfullpath, modelfullpath);
+            if (load_ret != 0)
+            {
+                fprintf(stderr, "🚨 Error: Failed to load model on GPU %d\n", gpuid[i]);
+                // cleanup already-created instances
+                for (int j = 0; j <= i; j++)
+                    delete realesrgan[j];
+                ncnn::destroy_gpu_instance();
+                return -1;
+            }
 
             realesrgan[i]->scale = scale;
             realesrgan[i]->tilesize = tilesize[i];
