@@ -343,7 +343,7 @@ test-file: build
 	  exit 1; \
 	fi
 	@mkdir -p output
-	time $(BINARY) -i ./images/ -o ./output/ -w 1020 -m models/ -n realesrgan-x4plus -c 0
+	time $(BINARY) -i ./images/ -o ./output/ -w 1020 -m models -n upscayl-standard-4x -c 0
 
 test-folder: build
 	@if [ ! -d models ] || [ -z "$$(ls models/ 2>/dev/null)" ]; then \
@@ -352,7 +352,7 @@ test-folder: build
 	  exit 1; \
 	fi
 	@mkdir -p images_out
-	time $(BINARY) -i ./images/ -o ./images_out/ -s 4 -m models/ -n realesrgan-x4plus
+	time $(BINARY) -i ./images/ -o ./images_out/ -s 4 -m models -n upscayl-standard-4x
 
 unit-test: check submodules
 	@mkdir -p $(BUILD_DIR)

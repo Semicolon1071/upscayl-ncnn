@@ -51,3 +51,4 @@ output/
 upscayl-bin
 models/
 .env
+.cache/

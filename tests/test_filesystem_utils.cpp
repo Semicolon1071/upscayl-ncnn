@@ -55,3 +55,63 @@ TEST_CASE("get_file_name_without_extension strips extension", "[filesystem]") {
 TEST_CASE("get_file_name_without_extension returns full name when no extension", "[filesystem]") {
     REQUIRE(get_file_name_without_extension("noextension") == "noextension");
 }
+
+// --- path_is_directory ---
+
+TEST_CASE("path_is_directory returns true for an existing directory", "[filesystem]") {
+    REQUIRE(path_is_directory("/tmp"));
+}
+
+TEST_CASE("path_is_directory returns false for non-existent path", "[filesystem]") {
+    REQUIRE_FALSE(path_is_directory("/tmp/upscayl_nonexistent_dir_xyzzy"));
+}
+
+TEST_CASE("path_is_directory returns false for a file path", "[filesystem]") {
+    // /dev/null is always present and is not a directory
+    REQUIRE_FALSE(path_is_directory("/dev/null"));
+}
+
+// --- filepath_is_readable ---
+
+TEST_CASE("filepath_is_readable returns true for a readable file", "[filesystem]") {
+    REQUIRE(filepath_is_readable("/dev/null"));
+}
+
+TEST_CASE("filepath_is_readable returns false for non-existent file", "[filesystem]") {
+    REQUIRE_FALSE(filepath_is_readable("/tmp/upscayl_nonexistent_file_xyzzy.bin"));
+}
+
+// --- list_directory ---
+
+TEST_CASE("list_directory succeeds on an accessible directory", "[filesystem]") {
+    std::vector<path_t> files;
+    REQUIRE(list_directory("/tmp", files) == 0);
+}
+
+TEST_CASE("list_directory returns error for non-existent path", "[filesystem]") {
+    std::vector<path_t> files;
+    REQUIRE(list_directory("/tmp/upscayl_nonexistent_dir_xyzzy", files) != 0);
+}
+
+TEST_CASE("list_directory clears output vector on failure", "[filesystem]") {
+    std::vector<path_t> files = {"leftover.png"};
+    list_directory("/tmp/upscayl_nonexistent_dir_xyzzy", files);
+    REQUIRE(files.empty());
+}
+
+TEST_CASE("list_directory returns error when path is a file, not a directory", "[filesystem]") {
+    std::vector<path_t> files;
+    REQUIRE(list_directory("/dev/null", files) != 0);
+}
+
+// --- sanitize_filepath ---
+
+TEST_CASE("sanitize_filepath returns path unchanged when file is readable", "[filesystem]") {
+    REQUIRE(sanitize_filepath("/dev/null") == "/dev/null");
+}
+
+TEST_CASE("sanitize_filepath falls back to executable directory for missing file", "[filesystem]") {
+    const std::string missing = "upscayl_nonexistent_model_xyzzy.param";
+    path_t result = sanitize_filepath(missing);
+    REQUIRE(result == get_executable_directory() + missing);
+}
