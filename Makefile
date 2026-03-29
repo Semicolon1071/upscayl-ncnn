@@ -90,7 +90,7 @@ CMAKE_FLAGS += $(CMAKE_EXTRA_FLAGS)
 # ============================================================
 
 .DEFAULT_GOAL := build
-.PHONY: help info check install-deps install-vulkan-sdk submodules configure build \
+.PHONY: help info check install-deps install-vulkan-sdk submodules configure build debug \
         test-file test-folder unit-test sanitize-test integration-test clean
 
 help:
@@ -105,7 +105,8 @@ help:
 	@echo "                    Download Vulkan SDK into this repo (interactive)"
 	@echo "  make submodules   Initialize/update git submodules"
 	@echo "  make configure    Run cmake configuration step"
-	@echo "  make build        Configure and build"
+	@echo "  make build        Configure and build (Release, optimized)"
+	@echo "  make debug        Configure and build with debug symbols (build-debug/)"
 	@echo "  make test-file    Upscale a single test image"
 	@echo "  make test-folder  Upscale a folder of test images"
 	@echo "  make unit-test    Build and run Catch2 unit tests"
@@ -117,6 +118,7 @@ help:
 	@echo "  make build CC=gcc-12 CXX=g++-12"
 	@echo "  make build BUILD_DIR=build-arm64 ARCH=arm64"
 	@echo "  make build VULKAN_SDK=/path/to/sdk"
+	@echo "  make build BUILD_TYPE=RelWithDebInfo  # optimized + debug symbols (for profiling)"
 
 info:
 	@echo "OS:            $(OS)"
@@ -335,6 +337,12 @@ build: configure
 	@echo ""
 	@echo "Built: $(BINARY)"
 
+# Debug build — uses a separate directory so it coexists with the release build.
+# $(MAKE) passes BUILD_TYPE and BUILD_DIR as command-line variables to the sub-make,
+# which ensures CMAKE_FLAGS (computed with :=) picks them up correctly.
+debug:
+	$(MAKE) BUILD_TYPE=Debug BUILD_DIR=build-debug
+
 # --- Test ---
 
 test-file: build
@@ -378,4 +386,4 @@ sanitize-test: check submodules
 # --- Clean ---
 
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) build-debug
