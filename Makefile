@@ -44,7 +44,8 @@ BINARY := $(BUILD_DIR)/src/upscayl-bin
 CMAKE_FLAGS := \
   -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
   -DCMAKE_C_COMPILER=$(CC) \
-  -DCMAKE_CXX_COMPILER=$(CXX)
+  -DCMAKE_CXX_COMPILER=$(CXX) \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
 ifeq ($(OS),Darwin)
   CMAKE_FLAGS += \
@@ -351,8 +352,8 @@ test-folder: build
 	  echo "Place model files (.param and .bin) in models/ before testing."; \
 	  exit 1; \
 	fi
-	@mkdir -p images_out
-	time $(BINARY) -i ./images/ -o ./images_out/ -s 4 -m models -n upscayl-standard-4x
+	@mkdir -p output
+	time $(BINARY) -i ./images/ -o ./output/ -s 4 -m models -n upscayl-standard-4x
 
 unit-test: check submodules
 	@mkdir -p $(BUILD_DIR)
