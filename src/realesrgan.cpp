@@ -175,44 +175,39 @@ int RealESRGAN::load(const std::string &parampath, const std::string &modelpath)
     }
 
     // bicubic 2x/3x/4x for alpha channel
-    {
-        bicubic_2x = ncnn::create_layer("Interp");
-        bicubic_2x->vkdev = net.vulkan_device();
-
-        ncnn::ParamDict pd;
-        pd.set(0, 3); // bicubic
-        pd.set(1, 2.f);
-        pd.set(2, 2.f);
-        bicubic_2x->load_param(pd);
-
-        bicubic_2x->create_pipeline(net.opt);
-    }
-    {
-        bicubic_3x = ncnn::create_layer("Interp");
-        bicubic_3x->vkdev = net.vulkan_device();
-
-        ncnn::ParamDict pd;
-        pd.set(0, 3); // bicubic
-        pd.set(1, 3.f);
-        pd.set(2, 3.f);
-        bicubic_3x->load_param(pd);
-
-        bicubic_3x->create_pipeline(net.opt);
-    }
-    {
-        bicubic_4x = ncnn::create_layer("Interp");
-        bicubic_4x->vkdev = net.vulkan_device();
-
-        ncnn::ParamDict pd;
-        pd.set(0, 3); // bicubic
-        pd.set(1, 4.f);
-        pd.set(2, 4.f);
-        bicubic_4x->load_param(pd);
-
-        bicubic_4x->create_pipeline(net.opt);
-    }
+    bicubic_2x = create_bicubic_layer(2.f);
+    bicubic_3x = create_bicubic_layer(3.f);
+    bicubic_4x = create_bicubic_layer(4.f);
 
     return 0;
+}
+
+ncnn::Layer *RealESRGAN::create_bicubic_layer(float scale_factor)
+{
+    ncnn::Layer *bicubic = ncnn::create_layer("Interp");
+    bicubic->vkdev = net.vulkan_device();
+
+    ncnn::ParamDict pd;
+    pd.set(0, 3); // bicubic interpolation
+    pd.set(1, scale_factor);
+    pd.set(2, scale_factor);
+    bicubic->load_param(pd);
+
+    bicubic->create_pipeline(net.opt);
+    return bicubic;
+}
+
+void RealESRGAN::scale_alpha_channel(const ncnn::VkMat &in_alpha, ncnn::VkMat &out_alpha,
+                                     ncnn::VkCompute &cmd, const ncnn::Option &opt) const
+{
+    if (scale == 1)
+        out_alpha = in_alpha;
+    else if (scale == 2)
+        bicubic_2x->forward(in_alpha, out_alpha, cmd, opt);
+    else if (scale == 3)
+        bicubic_3x->forward(in_alpha, out_alpha, cmd, opt);
+    else if (scale == 4)
+        bicubic_4x->forward(in_alpha, out_alpha, cmd, opt);
 }
 
 int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
@@ -239,7 +234,6 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
 
     const size_t in_out_tile_elemsize = opt.use_fp16_storage ? 2u : 4u;
 
-    // #pragma omp parallel for num_threads(2)
     for (int yi = 0; yi < ytiles; yi++)
     {
         const int tile_h_nopad = std::min((yi + 1) * TILE_SIZE_Y, h) - yi * TILE_SIZE_Y;
@@ -386,24 +380,7 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
 
                 ncnn::VkMat out_alpha_tile_gpu;
                 if (channels == 4)
-                {
-                    if (scale == 1)
-                    {
-                        out_alpha_tile_gpu = in_alpha_tile_gpu;
-                    }
-                    if (scale == 2)
-                    {
-                        bicubic_2x->forward(in_alpha_tile_gpu, out_alpha_tile_gpu, cmd, opt);
-                    }
-                    if (scale == 3)
-                    {
-                        bicubic_3x->forward(in_alpha_tile_gpu, out_alpha_tile_gpu, cmd, opt);
-                    }
-                    if (scale == 4)
-                    {
-                        bicubic_4x->forward(in_alpha_tile_gpu, out_alpha_tile_gpu, cmd, opt);
-                    }
-                }
+                    scale_alpha_channel(in_alpha_tile_gpu, out_alpha_tile_gpu, cmd, opt);
 
                 // postproc
                 {
@@ -505,24 +482,7 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
 
                 ncnn::VkMat out_alpha_tile_gpu;
                 if (channels == 4)
-                {
-                    if (scale == 1)
-                    {
-                        out_alpha_tile_gpu = in_alpha_tile_gpu;
-                    }
-                    if (scale == 2)
-                    {
-                        bicubic_2x->forward(in_alpha_tile_gpu, out_alpha_tile_gpu, cmd, opt);
-                    }
-                    if (scale == 3)
-                    {
-                        bicubic_3x->forward(in_alpha_tile_gpu, out_alpha_tile_gpu, cmd, opt);
-                    }
-                    if (scale == 4)
-                    {
-                        bicubic_4x->forward(in_alpha_tile_gpu, out_alpha_tile_gpu, cmd, opt);
-                    }
-                }
+                    scale_alpha_channel(in_alpha_tile_gpu, out_alpha_tile_gpu, cmd, opt);
 
                 // postproc
                 {

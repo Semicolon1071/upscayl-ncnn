@@ -31,6 +31,13 @@ public:
     int prepadding;
 
 private:
+    // Create a bicubic interpolation layer for the given scale factor.
+    ncnn::Layer *create_bicubic_layer(float scale_factor);
+
+    // Scale the alpha channel using the appropriate bicubic layer.
+    void scale_alpha_channel(const ncnn::VkMat &in_alpha, ncnn::VkMat &out_alpha,
+                             ncnn::VkCompute &cmd, const ncnn::Option &opt) const;
+
     ncnn::Net net;
     ncnn::Pipeline *realesrgan_preproc;
     ncnn::Pipeline *realesrgan_postproc;

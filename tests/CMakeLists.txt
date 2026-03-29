@@ -12,6 +12,7 @@ add_executable(upscayl-tests
     test_filesystem_extended.cpp
     test_image_utils.cpp
     ${CMAKE_SOURCE_DIR}/src/image_utils.cpp
+    ${CMAKE_SOURCE_DIR}/src/filesystem_utils.cpp
 )
 
 target_include_directories(upscayl-tests PRIVATE
@@ -29,6 +30,7 @@ catch_discover_tests(upscayl-tests)
 add_executable(upscayl-codec-tests
     test_codecs.cpp
     test_codecs_stb.cpp
+    ${CMAKE_SOURCE_DIR}/src/webp_image.cpp
 )
 
 target_include_directories(upscayl-codec-tests PRIVATE

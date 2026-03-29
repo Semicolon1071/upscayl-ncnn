@@ -58,7 +58,7 @@ compile_shader(realesrgan_postproc_tta.comp)
 
 add_custom_target(generate-spirv DEPENDS ${SHADER_SPV_HEX_FILES})
 
-add_executable(upscayl-bin main.cpp realesrgan.cpp image_utils.cpp)
+add_executable(upscayl-bin main.cpp realesrgan.cpp image_utils.cpp filesystem_utils.cpp webp_image.cpp task.cpp cli_options.cpp stb_impl.cpp pipeline.cpp)
 
 add_dependencies(upscayl-bin generate-spirv)
 
