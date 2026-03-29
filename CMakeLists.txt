@@ -56,7 +56,7 @@ if(NOT ENABLE_ASAN AND NOT ENABLE_UBSAN)
     if(ipo_supported)
         set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
     else()
-        message(WARNING "IPO is not supported: ${ipo_supported_output}")
+        message(STATUS "IPO is not supported: ${ipo_supported_output}")
     endif()
 endif()
 
