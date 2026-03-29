@@ -159,7 +159,7 @@ See the [Makefile](Makefile) for the full set of platform-specific cmake flags.
 | ------- | ------- | -------- | ------- |
 | [ncnn](https://github.com/Tencent/ncnn) | commit `20220420` | `src/ncnn/` (submodule) | BSD-3-Clause |
 | [libwebp](https://chromium.googlesource.com/webm/libwebp) | v1.2.1 | `src/libwebp/` (submodule) | BSD-3-Clause |
-| [stb_image](https://github.com/nothings/stb) | v2.26 | `third_party/stb_image.h` | Public Domain |
-| [stb_image_write](https://github.com/nothings/stb) | v1.15 | `third_party/stb_image_write.h` | Public Domain |
+| [stb_image](https://github.com/nothings/stb) | v2.30 | `third_party/stb_image.h` | Public Domain |
+| [stb_image_write](https://github.com/nothings/stb) | v1.16 | `third_party/stb_image_write.h` | Public Domain |
 | [stb_image_resize2](https://github.com/nothings/stb) | v2.18 | `third_party/stb_image_resize2.h` | Public Domain |
 | [Catch2](https://github.com/catchorg/Catch2) | v3.5.2 | fetched at build time (tests only) | BSL-1.0 |
