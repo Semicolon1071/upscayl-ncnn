@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <vector>
 
+#include "benchmark.h"
+
 static const uint32_t realesrgan_preproc_spv_data[] = {
 #include "realesrgan_preproc.spv.hex.h"
 };
@@ -48,7 +50,7 @@ RealESRGAN::RealESRGAN(int gpuid, bool _tta_mode)
     net.opt.use_vulkan_compute = true;
     net.opt.use_fp16_packed = true;
     net.opt.use_fp16_storage = true;
-    net.opt.use_fp16_arithmetic = false;
+    net.opt.use_fp16_arithmetic = true;
     net.opt.use_int8_storage = true;
     net.opt.use_int8_arithmetic = false;
 
@@ -234,6 +236,13 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
 
     const size_t in_out_tile_elemsize = opt.use_fp16_storage ? 2u : 4u;
 
+    double t_upload_ms = 0, t_preproc_ms = 0, t_infer_ms = 0, t_postproc_ms = 0, t_download_ms = 0;
+
+#if NCNN_BENCHMARK
+    const int net_layer_count = (int)net.layers().size();
+    std::vector<double> layer_times_us(net_layer_count, 0.0);
+#endif
+
     for (int yi = 0; yi < ytiles; yi++)
     {
         const int tile_h_nopad = std::min((yi + 1) * TILE_SIZE_Y, h) - yi * TILE_SIZE_Y;
@@ -271,13 +280,11 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
         // upload
         ncnn::VkMat in_gpu;
         {
+            double t0 = ncnn::get_current_time();
             cmd.record_clone(in, in_gpu, opt);
-
-            if (xtiles > 1)
-            {
-                cmd.submit_and_wait();
-                cmd.reset();
-            }
+            cmd.submit_and_wait();
+            cmd.reset();
+            t_upload_ms += ncnn::get_current_time() - t0;
         }
 
         int out_tile_y0 = std::max(yi * TILE_SIZE_Y, 0);
@@ -463,7 +470,11 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     dispatcher.h = in_tile_gpu.h;
                     dispatcher.c = channels;
 
+                    double t0_preproc = ncnn::get_current_time();
                     cmd.record_pipeline(realesrgan_preproc, bindings, constants, dispatcher);
+                    cmd.submit_and_wait();
+                    cmd.reset();
+                    t_preproc_ms += ncnn::get_current_time() - t0_preproc;
                 }
 
                 // realesrgan
@@ -477,7 +488,27 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
 
                     ex.input("data", in_tile_gpu);
 
+                    double t0_infer = ncnn::get_current_time();
+#if NCNN_BENCHMARK
+                    cmd.create_query_pool(net_layer_count * 2);
+#endif
                     ex.extract("output", out_tile_gpu, cmd);
+                    cmd.submit_and_wait();
+#if NCNN_BENCHMARK
+                    {
+                        std::vector<uint64_t> ts(net_layer_count * 2, 0);
+                        cmd.get_query_pool_results(0, net_layer_count * 2, ts);
+                        float ts_period = net.vulkan_device()->info.timestamp_period();
+                        for (int li = 0; li < net_layer_count; li++)
+                        {
+                            uint64_t s = ts[li * 2], e = ts[li * 2 + 1];
+                            if (s > 0 && e > s)
+                                layer_times_us[li] += (double)(e - s) * ts_period / 1000.0;
+                        }
+                    }
+#endif
+                    cmd.reset();
+                    t_infer_ms += ncnn::get_current_time() - t0_infer;
                 }
 
                 ncnn::VkMat out_alpha_tile_gpu;
@@ -511,14 +542,12 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                     dispatcher.h = out_gpu.h;
                     dispatcher.c = channels;
 
+                    double t0_postproc = ncnn::get_current_time();
                     cmd.record_pipeline(realesrgan_postproc, bindings, constants, dispatcher);
+                    cmd.submit_and_wait();
+                    cmd.reset();
+                    t_postproc_ms += ncnn::get_current_time() - t0_postproc;
                 }
-            }
-
-            if (xtiles > 1)
-            {
-                cmd.submit_and_wait();
-                cmd.reset();
             }
 
             fprintf(stderr, "%.2f%%\n", (float)(yi * xtiles + xi) / (ytiles * xtiles) * 100);
@@ -533,9 +562,10 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
                 out = ncnn::Mat(out_gpu.w, out_gpu.h, (unsigned char *)outimage.data + yi * scale * TILE_SIZE_Y * w * scale * channels, (size_t)channels, 1);
             }
 
+            double t0_dl = ncnn::get_current_time();
             cmd.record_clone(out_gpu, out, opt);
-
             cmd.submit_and_wait();
+            t_download_ms += ncnn::get_current_time() - t0_dl;
 
             if (!(opt.use_fp16_storage && opt.use_int8_storage))
             {
@@ -558,6 +588,20 @@ int RealESRGAN::process(const ncnn::Mat &inimage, ncnn::Mat &outimage) const
             }
         }
     }
+
+#if NCNN_BENCHMARK
+    fprintf(stderr, "[layer-benchmark] cumulative GPU time per layer (all tiles):\n");
+    for (int li = 0; li < net_layer_count; li++)
+    {
+        if (layer_times_us[li] > 0.0)
+            fprintf(stderr, "[layer %3d] %-24s %-30s %10.0fus\n",
+                    li, net.layers()[li]->type.c_str(), net.layers()[li]->name.c_str(),
+                    layer_times_us[li]);
+    }
+#endif
+    fprintf(stderr, "[phase-timing] upload=%.0fms preproc=%.0fms infer=%.0fms postproc=%.0fms download=%.0fms total=%.0fms\n",
+            t_upload_ms, t_preproc_ms, t_infer_ms, t_postproc_ms, t_download_ms,
+            t_upload_ms + t_preproc_ms + t_infer_ms + t_postproc_ms + t_download_ms);
 
     net.vulkan_device()->reclaim_blob_allocator(blob_vkallocator);
     net.vulkan_device()->reclaim_staging_allocator(staging_vkallocator);

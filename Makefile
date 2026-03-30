@@ -18,6 +18,9 @@ BUILD_TYPE    ?= Release
 CMAKE_SRC_DIR ?= .
 PARALLEL_JOBS ?= $(NPROC)
 VK_VERSION    ?= 1.3.280.0
+LOG_DIR           ?= logs
+PROFILE_BUILD_DIR ?= build-profile
+PROFILE_BINARY    := $(PROFILE_BUILD_DIR)/src/upscayl-bin
 
 # Compiler defaults — only override Make's built-in CC/CXX, not user-provided values.
 # $(origin VAR) returns "default" for Make's built-in, "command line" for CLI,
@@ -90,8 +93,9 @@ CMAKE_FLAGS += $(CMAKE_EXTRA_FLAGS)
 # ============================================================
 
 .DEFAULT_GOAL := build
-.PHONY: help info check install-deps install-vulkan-sdk submodules configure build debug \
-        test-file test-folder unit-test sanitize-test integration-test clean
+.PHONY: help info check install-deps install-vulkan-sdk submodules configure build debug build-log \
+        test-file test-folder unit-test sanitize-test integration-test clean \
+        profile test-file-profile
 
 help:
 	@echo "Upscayl NCNN build targets:"
@@ -106,12 +110,16 @@ help:
 	@echo "  make submodules   Initialize/update git submodules"
 	@echo "  make configure    Run cmake configuration step"
 	@echo "  make build        Configure and build (Release, optimized)"
+	@echo "  make build-log    Build and save output to logs/build-TIMESTAMP.log"
 	@echo "  make debug        Configure and build with debug symbols (build-debug/)"
-	@echo "  make test-file    Upscale a single test image"
-	@echo "  make test-folder  Upscale a folder of test images"
+	@echo "  make test-file    Upscale a single test image (logs to logs/test-file-TIMESTAMP.log)"
+	@echo "  make test-folder  Upscale a folder of test images (logs to logs/test-folder-TIMESTAMP.log)"
 	@echo "  make unit-test    Build and run Catch2 unit tests"
 	@echo "  make integration-test  Run CLI integration tests (no GPU needed)"
 	@echo "  make sanitize-test  Build and run tests with AddressSanitizer and UBSan"
+	@echo "  make profile      Build with NCNN_BENCHMARK=ON for per-layer profiling ($(PROFILE_BUILD_DIR)/)"
+	@echo "  make test-file-profile"
+	@echo "                    Run test image with profiling build (logs/profile-test-file-TIMESTAMP.log)"
 	@echo "  make clean        Remove build directory"
 	@echo ""
 	@echo "Override variables via CLI or .env file (see .env.example):"
@@ -328,9 +336,12 @@ submodules:
 
 # --- Build ---
 
+# cmake -B <build-dir> -S <source-dir> configures the build in <build-dir> without
+# having to cd there first.  cmake creates the build directory if it does not exist.
+# All -D flags set cmake cache variables (e.g. -DCMAKE_BUILD_TYPE=Release).
+# CMAKE_CXX_FLAGS passes extra flags directly to the C++ compiler for every file.
 configure: check submodules
-	@mkdir -p $(BUILD_DIR)
-	cd $(BUILD_DIR) && cmake $(CMAKE_FLAGS) ../$(CMAKE_SRC_DIR)
+	cmake -B $(BUILD_DIR) -S $(CMAKE_SRC_DIR) $(CMAKE_FLAGS)
 
 build: configure
 	cmake --build $(BUILD_DIR) -j $(PARALLEL_JOBS)
@@ -343,6 +354,39 @@ build: configure
 debug:
 	$(MAKE) BUILD_TYPE=Debug BUILD_DIR=build-debug
 
+build-log:
+	@mkdir -p $(LOG_DIR)
+	@LOG=$(LOG_DIR)/build-$$(date +%Y%m%d-%H%M%S).log; \
+	  echo "Logging build to: $$LOG"; \
+	  $(MAKE) build 2>&1 | tee "$$LOG"; \
+	  echo "Build log saved: $$LOG"
+
+# Profiling build — compiles NCNN with NCNN_BENCHMARK=ON and the matching preprocessor
+# define so every layer prints its execution time in milliseconds.
+# Note: cmake's option(NCNN_BENCHMARK) is never wired to a compile definition inside
+# NCNN's own CMakeLists, so we must pass -DNCNN_BENCHMARK=1 via CMAKE_CXX_FLAGS directly.
+profile: submodules
+	cmake -B $(PROFILE_BUILD_DIR) -S $(CMAKE_SRC_DIR) \
+	  $(CMAKE_FLAGS) \
+	  -DNCNN_BENCHMARK=ON \
+	  "-DCMAKE_CXX_FLAGS=-DNCNN_BENCHMARK=1 $(CXXFLAGS)"
+	cmake --build $(PROFILE_BUILD_DIR) -j $(PARALLEL_JOBS)
+	@echo ""
+	@echo "Profile build: $(PROFILE_BINARY)"
+
+test-file-profile: profile
+	@if [ ! -d models ] || [ -z "$$(ls models/ 2>/dev/null)" ]; then \
+	  echo "Error: models/ directory is empty or missing."; \
+	  exit 1; \
+	fi
+	@mkdir -p output $(LOG_DIR)
+	@LOG=$(LOG_DIR)/profile-test-file-$$(date +%Y%m%d-%H%M%S).log; \
+	  echo "Profiling to: $$LOG"; \
+	  { time $(PROFILE_BINARY) -i ./images/image.webp \
+	    -o ./output/image-profile.webp \
+	    -m models -n upscayl-standard-4x -c 0; } \
+	  2>&1 | tee "$$LOG"
+
 # --- Test ---
 
 test-file: build
@@ -351,8 +395,11 @@ test-file: build
 	  echo "Place model files (.param and .bin) in models/ before testing."; \
 	  exit 1; \
 	fi
-	@mkdir -p output
-	time $(BINARY) -i ./images/ -o ./output/ -w 1020 -m models -n upscayl-standard-4x -c 0
+	@mkdir -p output $(LOG_DIR)
+	@LOG=$(LOG_DIR)/test-file-$$(date +%Y%m%d-%H%M%S).log; \
+	  echo "Logging to: $$LOG"; \
+	  { time $(BINARY) -i ./images/image.webp -o ./output/image.webp -m models -n upscayl-standard-4x -c 0; } \
+	  2>&1 | tee "$$LOG"
 
 test-folder: build
 	@if [ ! -d models ] || [ -z "$$(ls models/ 2>/dev/null)" ]; then \
@@ -360,8 +407,11 @@ test-folder: build
 	  echo "Place model files (.param and .bin) in models/ before testing."; \
 	  exit 1; \
 	fi
-	@mkdir -p output
-	time $(BINARY) -i ./images/ -o ./output/ -s 4 -m models -n upscayl-standard-4x
+	@mkdir -p output $(LOG_DIR)
+	@LOG=$(LOG_DIR)/test-folder-$$(date +%Y%m%d-%H%M%S).log; \
+	  echo "Logging to: $$LOG"; \
+	  { time $(BINARY) -i ./images/ -o ./output/ -s 4 -m models -n upscayl-standard-4x; } \
+	  2>&1 | tee "$$LOG"
 
 unit-test: check submodules
 	@mkdir -p $(BUILD_DIR)
@@ -386,4 +436,4 @@ sanitize-test: check submodules
 # --- Clean ---
 
 clean:
-	rm -rf $(BUILD_DIR) build-debug
+	rm -rf $(BUILD_DIR) build-debug $(PROFILE_BUILD_DIR) $(LOG_DIR)
