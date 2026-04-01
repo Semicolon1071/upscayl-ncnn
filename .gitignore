@@ -1,8 +1,5 @@
 *.bin
 *.param
-build
-Debug
-release
 
 # Prerequisites
 *.d
@@ -37,19 +34,21 @@ release
 *.out
 *.app
 
-build*/
-VulkanSDK/
-vulkan-sdk/
-*.dmg
-ncnn/
-libwebp/
-images_out/*
-output/
-.DS_Store
-
+# Dependencies
+vulkan-sdk
 *.tar.xz
-upscayl-bin
-models/
-.env
+**/ncnn
+**/libwebp/
+
+# Test artifacts
+testdata/output/*
+testdata/models/*
+
+# Local
+build
 .cache/
+.env
 logs/
+
+*.dmg
+.DS_Store
