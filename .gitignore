@@ -43,6 +43,7 @@ vulkan-sdk
 # Test artifacts
 testdata/output/*
 testdata/models/*
+!testdata/models/upscayl-standard-4x.*
 
 # Local
 build
