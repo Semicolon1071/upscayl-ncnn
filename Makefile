@@ -14,12 +14,11 @@ NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 DATE  := $(shell date +%Y%m%d-%H%M%S)
 
 # --- Configurable variables (override via .env or CLI) ---
-# CMAKE_BUILD_TYPE: [Debug, Release, RelWithDebInfo, MinSizeRel]
-CMAKE_BUILD_TYPE		?= Release
-# CUSTOM_BUILD_OPTION: [default, profile, sanitize]
-CUSTOM_BUILD_OPTION		?= default
+# PRESET: CMake preset name (see CMakePresets.json for full list)
+#   release, debug, profile, unit-test, integration-test, sanitize
+PRESET					?= release
 BUILD_DIR				?= build
-BUILD_DIR_TYPE_OPTION	?= $(BUILD_DIR)/$(CMAKE_BUILD_TYPE)/$(CUSTOM_BUILD_OPTION)
+BUILD_DIR_PRESET		?= $(BUILD_DIR)/$(PRESET)
 CMAKE_SRC_DIR			?= $(PWD)
 MODEL_DIR				?= testdata/models
 # MODEL_NAME is the default model name passed to the CLI (without .param/.bin extension).
@@ -29,14 +28,23 @@ INPUT_FILE				?= $(INPUT_DIR)/image.webp
 OUTPUT_DIR				?= testdata/output
 OUTPUT_FILE				?= $(OUTPUT_DIR)/image-upscaled.webp
 PARALLEL_JOBS			?= $(NPROC)
-VK_VERSION				?= 1.4.328.0
+VK_VERSION				?= 1.4.341.1
 VULKAN_SDK_DIR			?= vulkan-sdk
+# Set USE_SYSTEM_VULKAN=1 to skip SDK download and use system-installed Vulkan packages.
+USE_SYSTEM_VULKAN		?=
+
+# Platform identifier for Lunarg SDK API (linux, mac)
+ifeq ($(OS),Linux)
+  VK_SDK_PLATFORM := linux
+else ifeq ($(OS),Darwin)
+  VK_SDK_PLATFORM := mac
+endif
 LOG_DIR					?= logs
-LOG_DIR_TYPE_OPTION		?= $(LOG_DIR)/$(CMAKE_BUILD_TYPE)/$(CUSTOM_BUILD_OPTION)
-BUILD_LOG				?= $(LOG_DIR_TYPE_OPTION)/build-$(DATE).log
+LOG_DIR_PRESET			?= $(LOG_DIR)/$(PRESET)
+BUILD_LOG				?= $(LOG_DIR_PRESET)/build-$(DATE).log
 TEST_NAME				?= unset
-TEST_LOG				?= $(LOG_DIR_TYPE_OPTION)/test-$(TEST_NAME)-$(DATE).log
-BINARY					:= $(BUILD_DIR_TYPE_OPTION)/src/upscayl-bin
+TEST_LOG				?= $(LOG_DIR_PRESET)/test-$(TEST_NAME)-$(DATE).log
+BINARY					:= $(BUILD_DIR_PRESET)/src/upscayl-bin
 
 # Compiler defaults — only override Make's built-in CC/CXX, not user-provided values.
 # $(origin VAR) returns "default" for Make's built-in, "command line" for CLI,
@@ -53,66 +61,50 @@ ifeq ($(OS),Darwin)
   LIBOMP_PREFIX ?= $(shell brew --prefix libomp 2>/dev/null)
 endif
 
-# Extra cmake flags (user-provided, appended last)
-CMAKE_EXTRA_FLAGS ?=
-
-# CMake flags that are passed directory to the CXX compiler
-CMAKE_CXX_FLAGS ?=
-
-# --- CMake flag assembly ---
-CMAKE_FLAGS := \
-  -DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE) \
-  -DCMAKE_C_COMPILER=$(CC) \
-  -DCMAKE_CXX_COMPILER=$(CXX) \
-  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-
-ifeq ($(OS),Darwin)
-  CMAKE_FLAGS += \
-    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-    -DCMAKE_OSX_ARCHITECTURES=$(ARCH) \
-    -DUSE_STATIC_MOLTENVK=ON
-
-  # Cross-compilation (e.g. ARCH=arm64 on an x86_64 runner)
-  HOST_ARCH := $(shell uname -m)
-  ifneq ($(ARCH),$(HOST_ARCH))
-    CMAKE_FLAGS += -DCMAKE_CROSSCOMPILING=ON -DCMAKE_SYSTEM_PROCESSOR=$(ARCH)
-  endif
-
-  # OpenMP (clang doesn't find it without hints)
-  ifneq ($(LIBOMP_PREFIX),)
-    CMAKE_FLAGS += \
-      -DOpenMP_C_FLAGS="-Xclang -fopenmp -I$(LIBOMP_PREFIX)/include" \
-      -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I$(LIBOMP_PREFIX)/include" \
-      -DOpenMP_C_LIB_NAMES=libomp \
-      -DOpenMP_CXX_LIB_NAMES=libomp \
-      -DOpenMP_libomp_LIBRARY="$(LIBOMP_PREFIX)/lib/libomp.a"
-  endif
-
-  # Vulkan / MoltenVK
-  ifdef VULKAN_SDK
-    CMAKE_FLAGS += \
-      -DVulkan_INCLUDE_DIR=$(VULKAN_SDK)/macOS/include \
-      -DVulkan_LIBRARY=$(VULKAN_SDK)/macOS/lib/MoltenVK.xcframework/macos-arm64_x86_64/libMoltenVK.a
+# --- Auto-detect VULKAN_SDK from downloaded SDK ---
+# $(wildcard ...) is evaluated at Makefile parse time, so a fresh `make check`
+# that downloads the SDK will not be visible until the next make invocation.
+# This is intentional — `check` is a one-time setup step, not a build prerequisite.
+ifndef VULKAN_SDK
+  ifeq ($(USE_SYSTEM_VULKAN),)
+    ifeq ($(OS),Linux)
+      _VK_SDK_CANDIDATE := $(PWD)/$(VULKAN_SDK_DIR)/$(VK_VERSION)/x86_64
+      ifneq ($(wildcard $(_VK_SDK_CANDIDATE)/bin/glslangValidator),)
+        VULKAN_SDK := $(_VK_SDK_CANDIDATE)
+      endif
+    else ifeq ($(OS),Darwin)
+      _VK_SDK_CANDIDATE := $(PWD)/$(VULKAN_SDK_DIR)
+      ifneq ($(wildcard $(_VK_SDK_CANDIDATE)/macOS/include/vulkan/vulkan.h),)
+        VULKAN_SDK := $(_VK_SDK_CANDIDATE)
+      endif
+    endif
   endif
 endif
 
-# Linux: CMake's FindVulkan reads VULKAN_SDK from the environment automatically.
-# Export it so the cmake subprocess inherits it.
+# --- Environment variable bridge ---
+# CMake presets read these env vars for compiler, SDK, and platform detection.
+# CMakeLists.txt uses them for platform-specific defaults (macOS OpenMP, MoltenVK).
+export CC CXX ARCH
 ifdef VULKAN_SDK
   export VULKAN_SDK
 endif
-
-CMAKE_FLAGS += $(CMAKE_EXTRA_FLAGS)
-CMAKE_FLAGS += $(CMAKE_CXX_FLAGS)
+ifeq ($(OS),Darwin)
+  export LIBOMP_PREFIX
+endif
 
 # ============================================================
 # Targets
 # ============================================================
 
 .DEFAULT_GOAL := help
-.PHONY: help info check install-deps install-vulkan-sdk submodules configure build debug build-log \
-        test-file test-folder unit-test sanitize-test integration-test clean \
-        profile test-file-profile
+.PHONY: help info check install-deps install-vulkan-sdk check-vk-update submodules \
+        configure _build build-default build rebuild debug profile \
+        check-model-dir check-model-file check-input-dir check-input-file \
+        ensure-output-dir ensure-log-dir setup-test \
+        _test-file test-file _test-folder test-folder test-file-profile \
+        _unit-test unit-test _integration-test integration-test \
+        _sanitize-test sanitize-test \
+        clean clean-build clean-logs clean-output clean-deps clean-all
 
 help:
 	@echo "Upscayl NCNN build targets:"
@@ -120,240 +112,58 @@ help:
 	@echo "  make                       Show help message (default)"
 	@echo "  make help                  Show help message (default)"
 	@echo "  make info                  Print detected platform, compilers, and paths"
-	@echo "  make check                 Verify required build tools are present"
+	@echo "  make check                 Install deps, download SDK, verify tools"
 	@echo "  make install-deps          Install system packages"
-	@echo "  make install-vulkan-sdk    Download Vulkan SDK into this repo"
+	@echo "  make install-vulkan-sdk    Download pinned Vulkan SDK (idempotent)"
+	@echo "  make check-vk-update       Check for newer Vulkan SDK versions"
 	@echo "  make submodules            Initialize/update git submodules"
-	@echo "  make configure             Run cmake configuration step"
-	@echo "  make build                 Configure and build"
-	@echo "  make rebuild               Clean and build"
-	@echo "  make debug                 Configure and build with debug symbols"
+	@echo "  make configure             Run cmake --preset (default: release)"
+	@echo "  make build                 Configure and build (default: release)"
+	@echo "  make rebuild               Clean current preset and build"
+	@echo "  make debug                 Build with PRESET=debug"
+	@echo "  make profile               Build with PRESET=profile (NCNN_BENCHMARK)"
 	@echo "  make test-file             Upscale a single test image"
 	@echo "  make test-folder           Upscale a folder of test images"
+	@echo "  make test-file-profile     Run test image with profiling build"
 	@echo "  make unit-test             Build and run Catch2 unit tests"
 	@echo "  make integration-test      Run CLI integration tests"
-	@echo "  make sanitize-test         Build and run tests with AddressSanitizer and UBSan"
-	@echo "  make profile               Build with NCNN_BENCHMARK=ON for per-layer profiling"
-	@echo "  make test-file-profile     Run test image with profiling build"
-	@echo "  make clean                 Remove build directory"
+	@echo "  make sanitize-test         Build and run tests with ASan + UBSan"
+	@echo "  make clean                 Remove build/logs for current preset"
 	@echo "  make clean-all             Remove build, logs, output, and downloaded SDK"
 	@echo ""
+	@echo "CMake presets (see CMakePresets.json):"
+	@echo "  release, debug, profile, unit-test, integration-test, sanitize"
+	@echo ""
 	@echo "Override variables via CLI or .env file (see .env.example):"
+	@echo "  make build PRESET=debug"
 	@echo "  make build CC=gcc-12 CXX=g++-12"
-	@echo "  make build BUILD_DIR_TYPE_OPTION=build-arm64 ARCH=arm64"
 	@echo "  make build VULKAN_SDK=/path/to/sdk"
-	@echo "  make build CMAKE_BUILD_TYPE=RelWithDebInfo"
+	@echo "  make check USE_SYSTEM_VULKAN=1       (skip SDK, use system packages)"
 
 info:
-	@echo "OS:                    $(OS)"
-	@echo "ARCH:                  $(ARCH)"
-	@echo "CC:                    $(CC)"
-	@echo "CXX:                   $(CXX)"
-	@echo "CMAKE_BUILD_TYPE:      $(CMAKE_BUILD_TYPE)"
-	@echo "CUSTOM_BUILD_OPTION:   $(CUSTOM_BUILD_OPTION)"
-	@echo "BUILD_DIR_TYPE_OPTION:             $(BUILD_DIR_TYPE_OPTION)"
-	@echo "CMAKE_SRC_DIR:         $(CMAKE_SRC_DIR)"
-	@echo "MODEL_DIR:             $(MODEL_DIR)"
-	@echo "MODEL_NAME:            $(MODEL_NAME)"
-	@echo "INPUT_DIR:             $(INPUT_DIR)"
-	@echo "INPUT_FILE:            $(INPUT_FILE)"
-	@echo "OUTPUT_DIR:            $(OUTPUT_DIR)"
-	@echo "PARALLEL_JOBS:         $(PARALLEL_JOBS)"
-	@echo "VK_VERSION:            $(VK_VERSION)"
-	@echo "VULKAN_SDK_DIR:        $(VULKAN_SDK_DIR)"
-	@echo "VULKAN_SDK:            $(or $(VULKAN_SDK),(not set))"
-	@echo "LOG_DIR_TYPE_OPTION:               $(LOG_DIR_TYPE_OPTION)"
-	@echo "BUILD_LOG:             $(BUILD_LOG)"
-	@echo "TEST_NAME:             $(TEST_NAME)"
-	@echo "TEST_LOG:              $(TEST_LOG)"
-	@echo "CMAKE_EXTRA_FLAGS:     $(CMAKE_EXTRA_FLAGS)"
-	@echo "CMAKE_CXX_FLAGS:       $(CMAKE_CXX_FLAGS)"
-	@echo "CMAKE_FLAGS:           $(CMAKE_FLAGS)"
+	@echo "OS:                $(OS)"
+	@echo "ARCH:              $(ARCH)"
+	@echo "CC:                $(CC)"
+	@echo "CXX:               $(CXX)"
+	@echo "PRESET:            $(PRESET)"
+	@echo "BUILD_DIR_PRESET:  $(BUILD_DIR_PRESET)"
+	@echo "MODEL_DIR:         $(MODEL_DIR)"
+	@echo "MODEL_NAME:        $(MODEL_NAME)"
+	@echo "INPUT_FILE:        $(INPUT_FILE)"
+	@echo "OUTPUT_DIR:        $(OUTPUT_DIR)"
+	@echo "PARALLEL_JOBS:     $(PARALLEL_JOBS)"
+	@echo "USE_SYSTEM_VULKAN: $(or $(USE_SYSTEM_VULKAN),(not set — using SDK))"
+	@echo "VK_VERSION:        $(VK_VERSION)"
+	@echo "VULKAN_SDK:        $(or $(VULKAN_SDK),(not set))"
+	@echo "LOG_DIR_PRESET:    $(LOG_DIR_PRESET)"
+	@echo "BUILD_LOG:         $(BUILD_LOG)"
+	@echo "TEST_LOG:          $(TEST_LOG)"
 ifeq ($(OS),Darwin)
-	@echo "LIBOMP_PREFIX:         $(or $(LIBOMP_PREFIX),(not found))"
+	@echo "LIBOMP_PREFIX:     $(or $(LIBOMP_PREFIX),(not found))"
 endif
-	@echo "BINARY:                $(BINARY)"
+	@echo "BINARY:            $(BINARY)"
 
-# --- Dependency checks ---
-
-check:
-	@echo "Checking build requirements..."; echo ""; FAIL=0; \
-	\
-	printf "  %-24s" "cmake"; \
-	if command -v cmake >/dev/null 2>&1; then \
-	  echo "OK ($$(cmake --version | head -1 | awk '{print $$3}'))"; \
-	else \
-	  echo "MISSING"; echo "    Install: sudo apt install cmake (Linux) / brew install cmake (macOS)"; FAIL=1; \
-	fi; \
-	\
-	printf "  %-24s" "$(CC)"; \
-	if command -v $(CC) >/dev/null 2>&1; then \
-	  echo "OK"; \
-	else \
-	  echo "MISSING"; \
-	  if command -v dnf >/dev/null 2>&1; then \
-	    echo "    Install: sudo dnf install gcc gcc-c++"; \
-	  else \
-	    echo "    Install: sudo apt install gcc-9 (Debian/Ubuntu)"; \
-	  fi; FAIL=1; \
-	fi; \
-	\
-	printf "  %-24s" "$(CXX)"; \
-	if command -v $(CXX) >/dev/null 2>&1; then \
-	  echo "OK"; \
-	else \
-	  echo "MISSING"; \
-	  if command -v dnf >/dev/null 2>&1; then \
-	    echo "    Install: sudo dnf install gcc-c++"; \
-	  else \
-	    echo "    Install: sudo apt install g++-9 (Debian/Ubuntu)"; \
-	  fi; FAIL=1; \
-	fi; \
-	\
-	printf "  %-24s" "libstdc++ (static)"; \
-	if echo 'int main(){}' | $(CXX) -static-libstdc++ -x c++ -o /dev/null - 2>/dev/null; then \
-	  echo "OK"; \
-	else \
-	  echo "MISSING"; \
-	  if command -v dnf >/dev/null 2>&1; then \
-	    echo "    Install: sudo dnf install libstdc++-static"; \
-	  else \
-	    echo "    (usually included with g++ on Debian/Ubuntu)"; \
-	  fi; FAIL=1; \
-	fi; \
-	\
-	printf "  %-24s" "glslangValidator"; \
-	if command -v glslangValidator >/dev/null 2>&1; then \
-	  echo "OK"; \
-	elif [ -n "$(VULKAN_SDK)" ] && [ -x "$(VULKAN_SDK)/bin/glslangValidator" ]; then \
-	  echo "OK (via VULKAN_SDK)"; \
-	else \
-	  echo "MISSING"; \
-	  if command -v dnf >/dev/null 2>&1; then \
-	    echo "    Install: sudo dnf install glslang"; \
-	  elif command -v apt >/dev/null 2>&1; then \
-	    echo "    Install: sudo apt install glslang-tools"; \
-	  else \
-	    echo "    Install: brew install glslang (macOS)"; \
-	  fi; FAIL=1; \
-	fi; \
-	\
-	printf "  %-24s" "Vulkan"; \
-	if [ -n "$(VULKAN_SDK)" ]; then \
-	  echo "OK (VULKAN_SDK=$(VULKAN_SDK))"; \
-	elif pkg-config --exists vulkan 2>/dev/null; then \
-	  echo "OK (system)"; \
-	else \
-	  echo "NOT FOUND"; \
-	  echo "    Set VULKAN_SDK in .env, or run: make install-vulkan-sdk"; \
-	  if command -v dnf >/dev/null 2>&1; then \
-	    echo "    Linux system install: sudo dnf install vulkan-loader-devel"; \
-	  else \
-	    echo "    Linux system install: sudo apt install libvulkan-dev"; \
-	  fi; FAIL=1; \
-	fi; \
-	\
-	printf "  %-24s" "OpenMP"; \
-	if [ "$(OS)" = "Darwin" ]; then \
-	  if [ -n "$(LIBOMP_PREFIX)" ] && [ -d "$(LIBOMP_PREFIX)" ]; then \
-	    echo "OK ($(LIBOMP_PREFIX))"; \
-	  else \
-	    echo "MISSING"; echo "    Install: brew install libomp"; FAIL=1; \
-	  fi; \
-	else \
-	  if [ -f /usr/lib/libomp.so ] || [ -f /usr/lib/x86_64-linux-gnu/libomp.so ] || [ -f /usr/lib64/libomp.so ]; then \
-	    echo "OK"; \
-	  elif dpkg -s libomp-dev >/dev/null 2>&1; then \
-	    echo "OK"; \
-	  elif rpm -q libomp-devel >/dev/null 2>&1; then \
-	    echo "OK"; \
-	  else \
-	    echo "MISSING (optional but recommended)"; \
-	    if command -v dnf >/dev/null 2>&1; then \
-	      echo "    Install: sudo dnf install libomp-devel"; \
-	    else \
-	      echo "    Install: sudo apt install libomp-dev"; \
-	    fi; \
-	  fi; \
-	fi; \
-	\
-	printf "  %-24s" "git submodules"; \
-	if [ -f src/ncnn/CMakeLists.txt ] && [ -f src/libwebp/CMakeLists.txt ]; then \
-	  echo "OK"; \
-	else \
-	  echo "NOT INITIALIZED"; echo "    Run: make submodules"; \
-	fi; \
-	\
-	echo ""; \
-	if [ $$FAIL -ne 0 ]; then \
-	  echo "FAILED: required tools missing (see above)."; exit 1; \
-	else \
-	  echo "All required tools found."; \
-	fi
-
-# --- Install system packages ---
-
-install-deps:
-ifeq ($(OS),Linux)
-	@if command -v dnf >/dev/null 2>&1; then \
-	  sudo dnf install -y cmake gcc gcc-c++ libstdc++-static libomp-devel vulkan-loader-devel glslang libasan libubsan; \
-	elif command -v apt >/dev/null 2>&1; then \
-	  sudo apt update && sudo apt install -y cmake gcc-9 g++-9 libomp-dev libvulkan-dev glslang-tools libasan8 libubsan1; \
-	else \
-	  echo "Unsupported Linux package manager. Install manually: cmake, gcc, g++, libomp, vulkan, glslang libasan libubsan"; exit 1; \
-	fi
-else ifeq ($(OS),Darwin)
-	brew install cmake libomp glslang
-else
-	@echo "Unsupported platform: $(OS)"; exit 1
-endif
-
-# --- Download Vulkan SDK into repo ---
-
-install-vulkan-sdk:
-ifeq ($(OS),Linux)
-	@echo "This will download the Vulkan SDK $(VK_VERSION) (~200 MB) into $(VULKAN_SDK_DIR)/"; \
-	echo ""; \
-	read -p "Continue? [y/N] " ans; \
-	case "$$ans" in [yY]*) ;; *) echo "Aborted."; exit 1;; esac; \
-	set -e; \
-	mkdir -p $(VULKAN_SDK_DIR); \
-	echo "Downloading..."; \
-	wget -q --show-progress \
-	  "https://sdk.lunarg.com/sdk/download/$(VK_VERSION)/linux/vulkansdk-linux-x86_64-$(VK_VERSION).tar.xz?Human=true" \
-	  -O $(VULKAN_SDK_DIR)/vk.tar.xz; \
-	echo "Extracting..."; \
-	tar xf $(VULKAN_SDK_DIR)/vk.tar.xz -C $(VULKAN_SDK_DIR); \
-	rm $(VULKAN_SDK_DIR)/vk.tar.xz; \
-	echo ""; \
-	echo "Done. Add to your .env:"; \
-	echo "  VULKAN_SDK=$$(pwd)/$(VULKAN_SDK_DIR)/$(VK_VERSION)/x86_64"
-else ifeq ($(OS),Darwin)
-	@echo "This will download the Vulkan SDK $(VK_VERSION) (~400 MB) into $(VULKAN_SDK_DIR)/"; \
-	echo "The installer requires sudo for the InstallVulkan step."; \
-	echo ""; \
-	read -p "Continue? [y/N] " ans; \
-	case "$$ans" in [yY]*) ;; *) echo "Aborted."; exit 1;; esac; \
-	set -e; \
-	mkdir -p $(VULKAN_SDK_DIR); \
-	echo "Downloading..."; \
-	curl -L --progress-bar \
-	  "https://sdk.lunarg.com/sdk/download/$(VK_VERSION)/mac/vulkansdk-macos-$(VK_VERSION).dmg?Human=true" \
-	  -o $(VULKAN_SDK_DIR)/vk.dmg; \
-	echo "Mounting and installing..."; \
-	hdiutil attach $(VULKAN_SDK_DIR)/vk.dmg -quiet; \
-	sudo /Volumes/vulkansdk-macos-$(VK_VERSION)/InstallVulkan.app/Contents/MacOS/InstallVulkan \
-	  --root $$(pwd)/$(VULKAN_SDK_DIR) --accept-licenses --default-answer --confirm-command install; \
-	hdiutil detach /Volumes/vulkansdk-macos-$(VK_VERSION) -quiet; \
-	rm $(VULKAN_SDK_DIR)/vk.dmg; \
-	echo ""; \
-	echo "Done. Add to your .env:"; \
-	echo "  VULKAN_SDK=$$(pwd)/$(VULKAN_SDK_DIR)"
-else
-	@echo "Unsupported platform: $(OS)"; exit 1
-endif
-
-# --- Submodules ---
+# --- Dependency Management ---
 
 submodules:
 	@if [ ! -f src/ncnn/CMakeLists.txt ] || [ ! -f src/libwebp/CMakeLists.txt ]; then \
@@ -363,43 +173,190 @@ submodules:
 	  echo "Submodules already initialized."; \
 	fi
 
+install-deps:
+ifeq ($(OS),Linux)
+	@if command -v dnf >/dev/null 2>&1; then \
+	  PKGS="cmake gcc gcc-c++ libstdc++-static libomp-devel libasan libubsan"; \
+	  if [ -n "$(USE_SYSTEM_VULKAN)" ]; then \
+	    PKGS="$$PKGS vulkan-loader-devel glslang"; \
+	  fi; \
+	  sudo dnf install -y $$PKGS; \
+	elif command -v apt >/dev/null 2>&1; then \
+	  PKGS="build-essential cmake libomp-dev libasan8 libubsan1"; \
+	  if [ -n "$(USE_SYSTEM_VULKAN)" ]; then \
+	    PKGS="$$PKGS libvulkan-dev glslang-tools"; \
+	  fi; \
+	  sudo apt update && sudo apt install -y $$PKGS; \
+	else \
+	  echo "Unsupported Linux package manager."; exit 1; \
+	fi
+else ifeq ($(OS),Darwin)
+	@PKGS="cmake libomp"; \
+	if [ -n "$(USE_SYSTEM_VULKAN)" ]; then \
+	  PKGS="$$PKGS glslang"; \
+	fi; \
+	brew install $$PKGS
+else
+	@echo "Unsupported platform: $(OS)"; exit 1
+endif
+
+check: install-deps install-vulkan-sdk
+	@FAIL=0; \
+	command -v cmake >/dev/null 2>&1 \
+	  || { echo "FAIL: cmake not found"; FAIL=1; }; \
+	command -v $(CC) >/dev/null 2>&1 \
+	  || { echo "FAIL: $(CC) not found"; FAIL=1; }; \
+	command -v $(CXX) >/dev/null 2>&1 \
+	  || { echo "FAIL: $(CXX) not found"; FAIL=1; }; \
+	echo 'int main(){}' | $(CXX) -static-libstdc++ -x c++ -o /dev/null - 2>/dev/null \
+	  || { echo "FAIL: libstdc++ static linking unavailable"; FAIL=1; }; \
+	GLSLANG=""; \
+	if [ -n "$(VULKAN_SDK)" ] && [ -x "$(VULKAN_SDK)/bin/glslangValidator" ]; then \
+	  GLSLANG="$(VULKAN_SDK)/bin/glslangValidator"; \
+	elif command -v glslangValidator >/dev/null 2>&1; then \
+	  GLSLANG=$$(command -v glslangValidator); \
+	else \
+	  echo "FAIL: glslangValidator not found"; FAIL=1; \
+	fi; \
+	{ [ -n "$(VULKAN_SDK)" ] || pkg-config --exists vulkan 2>/dev/null; } \
+	  || { echo "FAIL: Vulkan not found"; FAIL=1; }; \
+	if [ "$(OS)" = "Darwin" ]; then \
+	  { [ -n "$(LIBOMP_PREFIX)" ] && [ -d "$(LIBOMP_PREFIX)" ]; } \
+	    || { echo "FAIL: OpenMP not found"; FAIL=1; }; \
+	else \
+	  { [ -f /usr/lib/libomp.so ] || [ -f /usr/lib/x86_64-linux-gnu/libomp.so ] || [ -f /usr/lib64/libomp.so ] \
+	    || dpkg -s libomp-dev >/dev/null 2>&1 || rpm -q libomp-devel >/dev/null 2>&1; } \
+	    || { echo "FAIL: OpenMP not found"; FAIL=1; }; \
+	fi; \
+	if [ $$FAIL -ne 0 ]; then \
+	  echo "check failed: install-deps is missing packages for this platform."; exit 1; \
+	fi; \
+	echo ""; \
+	echo "Build tools:"; \
+	printf "  %-16s %s\n" "cmake" "$$(cmake --version | head -1 | awk '{print $$3}')"; \
+	printf "  %-16s %s\n" "$(CC)" "$$($(CC) --version | head -1)"; \
+	printf "  %-16s %s\n" "$(CXX)" "$$($(CXX) --version | head -1)"; \
+	if [ -n "$$GLSLANG" ]; then \
+	  GLSLANG_VER=$$($$GLSLANG --version 2>&1 | head -1); \
+	  printf "  %-16s %s  (%s)\n" "glslangValidator" "$$GLSLANG_VER" "$$GLSLANG"; \
+	fi; \
+	if [ -n "$(VULKAN_SDK)" ]; then \
+	  printf "  %-16s %s\n" "Vulkan" "SDK $(VK_VERSION)  ($(VULKAN_SDK))"; \
+	else \
+	  printf "  %-16s %s\n" "Vulkan" "system packages"; \
+	fi
+
+# --- Download Vulkan SDK into repo ---
+# Idempotent: skips download if SDK already present at the pinned version.
+# Self-gating: no-op when USE_SYSTEM_VULKAN is set.
+
+install-vulkan-sdk:
+ifneq ($(USE_SYSTEM_VULKAN),)
+	@echo "USE_SYSTEM_VULKAN is set — skipping SDK download."
+else ifeq ($(OS),Linux)
+	@if [ "$(ARCH)" != "x86_64" ]; then \
+	  echo "Error: Lunarg SDK only provides x86_64 Linux tarballs (detected: $(ARCH))."; \
+	  echo "Use USE_SYSTEM_VULKAN=1 with system packages instead."; exit 1; \
+	fi; \
+	SENTINEL="$(VULKAN_SDK_DIR)/$(VK_VERSION)/x86_64/bin/glslangValidator"; \
+	if [ -x "$$SENTINEL" ]; then \
+	  echo "Vulkan SDK $(VK_VERSION) already present."; exit 0; \
+	fi; \
+	set -e; \
+	URL="https://sdk.lunarg.com/sdk/download/$(VK_VERSION)/linux/vulkansdk-linux-x86_64-$(VK_VERSION).tar.xz?Human=true"; \
+	echo "Downloading Vulkan SDK $(VK_VERSION) to $(VULKAN_SDK_DIR)/..."; \
+	echo "  $$URL"; \
+	mkdir -p $(VULKAN_SDK_DIR); \
+	wget -q --show-progress "$$URL" -O $(VULKAN_SDK_DIR)/vk.tar.xz; \
+	echo "Extracting..."; \
+	tar xf $(VULKAN_SDK_DIR)/vk.tar.xz -C $(VULKAN_SDK_DIR); \
+	rm $(VULKAN_SDK_DIR)/vk.tar.xz; \
+	echo "Vulkan SDK $(VK_VERSION) installed to $(VULKAN_SDK_DIR)/$(VK_VERSION)/x86_64"
+else ifeq ($(OS),Darwin)
+	@SENTINEL="$(VULKAN_SDK_DIR)/macOS/include/vulkan/vulkan.h"; \
+	if [ -f "$$SENTINEL" ]; then \
+	  echo "Vulkan SDK already present."; exit 0; \
+	fi; \
+	set -e; \
+	URL="https://sdk.lunarg.com/sdk/download/$(VK_VERSION)/mac/vulkansdk-macos-$(VK_VERSION).dmg?Human=true"; \
+	echo "Downloading Vulkan SDK $(VK_VERSION) to $(VULKAN_SDK_DIR)/..."; \
+	echo "  $$URL"; \
+	mkdir -p $(VULKAN_SDK_DIR); \
+	curl -L --progress-bar "$$URL" -o $(VULKAN_SDK_DIR)/vk.dmg; \
+	echo "Installing (requires sudo)..."; \
+	hdiutil attach $(VULKAN_SDK_DIR)/vk.dmg -quiet; \
+	sudo /Volumes/vulkansdk-macos-$(VK_VERSION)/InstallVulkan.app/Contents/MacOS/InstallVulkan \
+	  --root $$(pwd)/$(VULKAN_SDK_DIR) --accept-licenses --default-answer --confirm-command install; \
+	hdiutil detach /Volumes/vulkansdk-macos-$(VK_VERSION) -quiet; \
+	rm $(VULKAN_SDK_DIR)/vk.dmg; \
+	echo "Vulkan SDK $(VK_VERSION) installed to $(VULKAN_SDK_DIR)/"
+else
+	@echo "Unsupported platform: $(OS)"; exit 1
+endif
+
+# Check for newer Vulkan SDK versions at sdk.lunarg.com.
+check-vk-update:
+	@LATEST=$$(curl -sf https://vulkan.lunarg.com/sdk/latest/$(VK_SDK_PLATFORM).txt) || \
+	  { echo "Failed to fetch latest SDK version (network error?)"; exit 1; }; \
+	echo "Pinned:  $(VK_VERSION)"; \
+	echo "Latest:  $$LATEST"; \
+	if [ "$(VK_VERSION)" = "$$LATEST" ]; then \
+	  echo "Up to date."; \
+	else \
+	  echo "Update available. Edit VK_VERSION in Makefile to upgrade."; \
+	fi
+
+# --- Log header ---
+# Writes runtime environment info to the start of a log file.
+# The binary's own build_info.h captures compile-time parameters;
+# this header captures the runtime context. A discrepancy between
+# them signals a stale binary or changed environment.
+
+define log-header
+	@printf "=== Build Environment ===\n" > "$(1)"; \
+	printf "Date:       %s\n" "$$(date -Iseconds)" >> "$(1)"; \
+	printf "Preset:     %s\n" "$(PRESET)" >> "$(1)"; \
+	printf "OS:         %s %s\n" "$(OS)" "$(ARCH)" >> "$(1)"; \
+	printf "CC:         %s\n" "$(CC)" >> "$(1)"; \
+	printf "CXX:        %s\n" "$(CXX)" >> "$(1)"; \
+	printf "VULKAN_SDK: %s\n" "$(or $(VULKAN_SDK),(system))" >> "$(1)"; \
+	printf "VK_VERSION: %s\n" "$(VK_VERSION)" >> "$(1)"; \
+	printf "Binary:     %s\n" "$(BINARY)" >> "$(1)"; \
+	printf "===\n\n" >> "$(1)"
+endef
+
 # --- Build ---
 
-# cmake -B <build-dir> -S <source-dir> configures the build in <build-dir> without
-# having to cd there first.  cmake creates the build directory if it does not exist.
-# All -D flags set cmake cache variables (e.g. -DCMAKE_BUILD_TYPE=Release).
-# CMAKE_CXX_FLAGS passes extra flags directly to the C++ compiler for every file.
-configure: check submodules
-	@echo "Configuring build with CMake..."
-	cmake -B $(BUILD_DIR_TYPE_OPTION) -S $(CMAKE_SRC_DIR) $(CMAKE_FLAGS)
+# cmake --preset reads configuration from CMakePresets.json.
+# The preset sets build type, build directory, cache variables, etc.
+# Environment variables (CC, CXX, VULKAN_SDK, ARCH, LIBOMP_PREFIX) are exported
+# above so CMakeLists.txt can use them for platform-specific defaults.
+configure: submodules
+	@echo "Configuring with preset '$(PRESET)'..."
+	cmake --preset $(PRESET)
 	@echo "Configuration complete."
 
 _build: configure
-	@echo "Building with CMake..."
-	cmake --build $(BUILD_DIR_TYPE_OPTION) -j $(PARALLEL_JOBS)
+	@echo "Building with preset '$(PRESET)'..."
+	cmake --build --preset $(PRESET) -j $(PARALLEL_JOBS)
 	@echo "Built: $(BINARY)"
 
 build-default: ensure-log-dir
 	@echo "Logging build to: $(BUILD_LOG)"
-	$(MAKE) _build 2>&1 | tee "$(BUILD_LOG)"
+	$(call log-header,$(BUILD_LOG))
+	$(MAKE) _build 2>&1 | tee -a "$(BUILD_LOG)"
 	@echo "Build log saved: $(BUILD_LOG)"
 
 build: build-default
 
 rebuild: clean build
 
-# Debug build — uses a separate directory so it coexists with the release build.
-# $(MAKE) passes BUILD_TYPE as command-line variables to the sub-make,
-# which ensures CMAKE_FLAGS (computed with :=) picks them up correctly.
-build-debug:
-	$(MAKE) build CMAKE_BUILD_TYPE=Debug
+# Convenience aliases — each uses a named preset from CMakePresets.json.
+debug:
+	$(MAKE) build PRESET=debug
 
-# Profiling build — compiles NCNN with NCNN_BENCHMARK=ON and the matching preprocessor
-# define so every layer prints its execution time in milliseconds.
-# Note: cmake's option(NCNN_BENCHMARK) is never wired to a compile definition inside
-# NCNN's own CMakeLists, so we must pass -DNCNN_BENCHMARK=1 via CMAKE_CXX_FLAGS directly.
-build-profile:
-	$(MAKE) build CMAKE_BUILD_TYPE=Release CUSTOM_BUILD_OPTION=profile CMAKE_CXX_FLAGS="-DNCNN_BENCHMARK=1"
+profile:
+	$(MAKE) build PRESET=profile
 
 # --- Test ---
 
@@ -436,7 +393,7 @@ ensure-output-dir:
 	@mkdir -p $(OUTPUT_DIR)
 
 ensure-log-dir:
-	@mkdir -p $(LOG_DIR_TYPE_OPTION)
+	@mkdir -p $(LOG_DIR_PRESET)
 
 setup-test: check-model-file check-input-file ensure-output-dir ensure-log-dir
 	@echo "Test setup complete."
@@ -444,15 +401,9 @@ setup-test: check-model-file check-input-file ensure-output-dir ensure-log-dir
 	@echo "Input: ${INPUT_FILE}"
 	@echo "Output: ${OUTPUT_FILE}"
 
-# Variable-chain for defining TEST_LOG:
-# TEST_LOG <-- LOG_DIR_TYPE_OPTION + TEST_NAME + timestamp
-# LOG_DIR_TYPE_OPTION <-- logs/ + CMAKE_BUILD_TYPE + CUSTOM_BUILD_OPTION
-# CMAKE_BUILD_TYPE (default "Release") and CUSTOM_BUILD_OPTION (default "default") are used to group logs by build configuration.
-# CUSTOM_BUILD_OPTION is useful to differentiate between different builds of the same type (e.g. default vs profile), while CMAKE_BUILD_TYPE differentiates between fundamentally different builds (e.g. Release vs Debug).
-# TEST_NAME (default "unset") is used to differentiate logs for different test targets (e.g. test-file vs test-folder).
-# You can test this by running 'make info' and seeing the printed values.
 _test-file: setup-test build
 	@echo "Logging to: $(TEST_LOG)"
+	$(call log-header,$(TEST_LOG))
 	{ time $(BINARY) \
 		-i $(INPUT_FILE) \
 		-o $(OUTPUT_FILE) \
@@ -460,18 +411,15 @@ _test-file: setup-test build
 		-n $(MODEL_NAME) \
 		-c 0 \
 		-s 4; \
-	} 2>&1 | tee "$(TEST_LOG)"
+	} 2>&1 | tee -a "$(TEST_LOG)"
 
 test-file:
 	@echo "Testing single file upscale..."; \
 	$(MAKE) _test-file TEST_NAME=test-file
 
-# test-folder target runs the same upscale command but with an input directory instead of a single file,
-# allowing you to test multiple images at once. 
-# The output files will be saved in the specified output directory with the same names as the input files
-# but with "-upscaled" appended before the extension (e.g. image.webp -> image-upscaled.webp).
 _test-folder: setup-test build
-	@echo "Testing folder upscale..."; \
+	@echo "Testing folder upscale..."
+	$(call log-header,$(TEST_LOG))
 	{ time $(BINARY) \
 		-i $(INPUT_DIR) \
 		-o $(OUTPUT_DIR) \
@@ -479,7 +427,7 @@ _test-folder: setup-test build
 		-n $(MODEL_NAME) \
 		-c 0 \
 		-s 4; \
-	} 2>&1 | tee "$(TEST_LOG)"
+	} 2>&1 | tee -a "$(TEST_LOG)"
 
 test-folder:
 	@echo "Testing folder upscale..."; \
@@ -487,38 +435,47 @@ test-folder:
 
 test-file-profile:
 	@echo "Testing single file upscale with profiling..."; \
-	$(MAKE) _test-file CMAKE_BUILD_TYPE=Release CUSTOM_BUILD_OPTION=profile CMAKE_CXX_FLAGS="-DNCNN_BENCHMARK=1" TEST_NAME=test-file-profile
+	$(MAKE) _test-file \
+		TEST_NAME=test-file-profile \
+		PRESET=profile
 
-unit-test: check submodules
-	@mkdir -p $(BUILD_DIR_TYPE_OPTION)
-	cd $(BUILD_DIR_TYPE_OPTION) && cmake $(CMAKE_FLAGS) -DBUILD_TESTS=ON ../$(CMAKE_SRC_DIR)
-	cmake --build $(BUILD_DIR_TYPE_OPTION) -j $(PARALLEL_JOBS) --target upscayl-tests --target upscayl-codec-tests
-	cd $(BUILD_DIR_TYPE_OPTION) && ctest --output-on-failure
+_unit-test: build
+	@echo "Running unit tests..."
+	@echo "Logging to: $(TEST_LOG)"
+	$(call log-header,$(TEST_LOG))
+	ctest --test-dir $(BUILD_DIR_PRESET) --output-on-failure 2>&1 | tee -a "$(TEST_LOG)"
 
-integration-test: build
-	UPSCAYL_BIN=$(BINARY) python3 tests/test_cli_integration.py
+unit-test:
+	$(MAKE) _unit-test \
+		TEST_NAME=unit-test \
+		PRESET=unit-test
 
-sanitize-test: check submodules
-	@mkdir -p $(BUILD_DIR_TYPE_OPTION)-sanitize
-	cd $(BUILD_DIR_TYPE_OPTION)-sanitize && cmake $(CMAKE_FLAGS) \
-	    -DBUILD_TESTS=ON \
-	    -DENABLE_ASAN=ON \
-	    -DENABLE_UBSAN=ON \
-	    -DCMAKE_BUILD_TYPE=Debug \
-	    ../$(CMAKE_SRC_DIR)
-	cmake --build $(BUILD_DIR_TYPE_OPTION)-sanitize -j $(PARALLEL_JOBS) --target upscayl-tests --target upscayl-codec-tests
-	cd $(BUILD_DIR_TYPE_OPTION)-sanitize && ctest --output-on-failure
+_integration-test: build
+	@echo "Running CLI integration tests..."
+	@echo "Logging to: $(TEST_LOG)"
+	$(call log-header,$(TEST_LOG))
+	UPSCAYL_BIN=$(BINARY) python3 tests/test_cli_integration.py 2>&1 | tee -a "$(TEST_LOG)"
+
+integration-test:
+	$(MAKE) _integration-test \
+		TEST_NAME=integration-test \
+		PRESET=integration-test
+
+_sanitize-test: build
+	@echo "Running sanitizer tests..."
+	@echo "Logging to: $(TEST_LOG)"
+	$(call log-header,$(TEST_LOG))
+	ctest --test-dir $(BUILD_DIR_PRESET) --output-on-failure 2>&1 | tee -a "$(TEST_LOG)"
+
+sanitize-test:
+	$(MAKE) _sanitize-test \
+		TEST_NAME=sanitize-test \
+		PRESET=sanitize
 
 # --- Clean ---
 
-clean-build-type-option:
-	rm -rf $(BUILD_DIR_TYPE_OPTION)
-
-clean-build: clean-build-type-option
+clean-build:
 	rm -rf $(BUILD_DIR)
-
-clean-logs-type-option:
-	rm -rf $(LOG_DIR_TYPE_OPTION)
 
 clean-logs:
 	rm -rf $(LOG_DIR)
@@ -529,9 +486,9 @@ clean-output:
 clean-deps:
 	rm -rf $(VULKAN_SDK_DIR)
 
-clean-type-option: clean-build-type-option clean-logs-type-option
-
-# "clean" removes the build and logs for the current CMAKE_BUILD_TYPE and CUSTOM_BUILD_OPTION, preserving other configurations (e.g. debug logs remain if you clean the release build).
-clean: clean-type-option
+# "clean" removes the build and logs for the current PRESET only,
+# preserving other presets (e.g. debug logs remain if you clean the release build).
+clean:
+	rm -rf $(BUILD_DIR_PRESET) $(LOG_DIR_PRESET)
 
 clean-all: clean-build clean-logs clean-output clean-deps

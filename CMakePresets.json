@@ -1,0 +1,116 @@
+{
+  "version": 4,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "PRESET_NAME": "${presetName}"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "description": "Optimized release build",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "description": "Debug build with symbols",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "profile",
+      "displayName": "Profile",
+      "description": "Release build with NCNN benchmark timing",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NCNN_BENCHMARK": "ON"
+      }
+    },
+    {
+      "name": "unit-test",
+      "displayName": "Unit Tests",
+      "description": "Debug build with Catch2 unit tests",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "integration-test",
+      "displayName": "Integration Tests",
+      "description": "Debug build for CLI integration tests",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "sanitize",
+      "displayName": "Sanitizers",
+      "description": "Debug build with AddressSanitizer and UndefinedBehaviorSanitizer",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTS": "ON",
+        "ENABLE_ASAN": "ON",
+        "ENABLE_UBSAN": "ON"
+      }
+    },
+    {
+      "name": "release-cross",
+      "displayName": "Release (cross-compile)",
+      "description": "macOS cross-compilation build (set ARCH env var)",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/release-$env{ARCH}",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PRESET_NAME": "release-cross"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "release",          "configurePreset": "release" },
+    { "name": "debug",            "configurePreset": "debug" },
+    { "name": "profile",          "configurePreset": "profile" },
+    { "name": "unit-test",        "configurePreset": "unit-test" },
+    { "name": "integration-test", "configurePreset": "integration-test" },
+    { "name": "sanitize",         "configurePreset": "sanitize" },
+    { "name": "release-cross",    "configurePreset": "release-cross" }
+  ],
+  "testPresets": [
+    {
+      "name": "unit-test",
+      "configurePreset": "unit-test",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "sanitize",
+      "configurePreset": "sanitize",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

@@ -26,8 +26,11 @@ struct CliOptions
     int jobs_save = 2;
     int verbose = 0;
     int tta_mode = 0;
+    int show_version = 0;
     path_t format = PATHSTR("png");
 };
+
+void print_build_info();
 
 // Parse command-line arguments into a CliOptions struct.
 // Returns 0 on success, -1 on error (prints usage/error to stderr).

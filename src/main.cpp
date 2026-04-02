@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "platform.h"
+#include "build_info.h"
 #include "cli_options.h"
 #include "pipeline.h"
 
@@ -18,6 +19,12 @@ int main(int argc, char **argv)
     CliOptions options;
     if (parse_command_line(argc, argv, options) != 0)
         return -1;
+
+    if (options.verbose)
+        fprintf(stderr, "[build: %s %s %s %s %s]\n",
+                BUILD_PRESET[0] ? BUILD_PRESET : "manual",
+                BUILD_TYPE, BUILD_COMPILER_ID, BUILD_ARCH,
+                BUILD_GIT_DESCRIBE[0] ? BUILD_GIT_DESCRIBE : "");
 
     std::vector<path_t> input_files;
     std::vector<path_t> output_files;

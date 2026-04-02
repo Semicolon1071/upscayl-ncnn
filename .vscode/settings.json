@@ -1,9 +1,9 @@
 {
   "cmake.sourceDirectory": "/home/andreas/repo/upscayl-ncnn",
   "clangd.arguments": [
-    "--compile-commands-dir=${workspaceFolder}/build"
+    "--compile-commands-dir=${workspaceFolder}/build/debug"
   ],
-  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/debug/compile_commands.json",
   "files.associations": {
     "*.jsx": "javascriptreact",
     ".env.local": "dotenv",

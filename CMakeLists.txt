@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.21)
 
 cmake_policy(SET CMP0091 NEW)
 set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
@@ -34,11 +34,48 @@ if(ENABLE_UBSAN)
     add_link_options(-fsanitize=undefined)
 endif()
 
+# --- Platform-specific defaults ---
+# These read environment variables exported by the Makefile (CC, CXX, VULKAN_SDK,
+# LIBOMP_PREFIX, ARCH).  Running cmake directly without those env vars is fine —
+# cmake falls back to its default compiler/library detection.
+
+if(APPLE)
+    # Architecture (defaults to host arch if ARCH env var is unset)
+    if(DEFINED ENV{ARCH})
+        set(CMAKE_OSX_ARCHITECTURES "$ENV{ARCH}" CACHE STRING "macOS target architecture")
+    endif()
+
+    # Static MoltenVK is the only viable Vulkan path on macOS
+    set(USE_STATIC_MOLTENVK ON CACHE BOOL "link moltenvk static library")
+
+    # Cross-compilation support (e.g. building arm64 on an x86_64 runner)
+    if(DEFINED CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL CMAKE_HOST_SYSTEM_PROCESSOR)
+        set(CMAKE_CROSSCOMPILING ON)
+        set(CMAKE_SYSTEM_PROCESSOR ${CMAKE_OSX_ARCHITECTURES})
+    endif()
+
+    # OpenMP hints for Apple Clang (needs Homebrew libomp)
+    if(DEFINED ENV{LIBOMP_PREFIX})
+        set(_OMP "$ENV{LIBOMP_PREFIX}")
+        set(OpenMP_C_FLAGS   "-Xclang -fopenmp -I${_OMP}/include" CACHE STRING "")
+        set(OpenMP_CXX_FLAGS "-Xclang -fopenmp -I${_OMP}/include" CACHE STRING "")
+        set(OpenMP_C_LIB_NAMES   "libomp" CACHE STRING "")
+        set(OpenMP_CXX_LIB_NAMES "libomp" CACHE STRING "")
+        set(OpenMP_libomp_LIBRARY "${_OMP}/lib/libomp.a" CACHE FILEPATH "")
+    endif()
+
+    # Vulkan / MoltenVK paths
+    if(DEFINED ENV{VULKAN_SDK})
+        set(Vulkan_INCLUDE_DIR "$ENV{VULKAN_SDK}/macOS/include" CACHE PATH "")
+        set(Vulkan_LIBRARY "$ENV{VULKAN_SDK}/macOS/lib/MoltenVK.xcframework/macos-arm64_x86_64/libMoltenVK.a" CACHE FILEPATH "")
+    endif()
+endif()
+
 find_package(Threads)
 find_package(OpenMP)
 find_package(Vulkan REQUIRED)
 
-find_program(GLSLANGVALIDATOR_EXECUTABLE NAMES glslangValidator PATHS $ENV{VULKAN_SDK}/bin NO_CMAKE_FIND_ROOT_PATH)
+find_program(GLSLANGVALIDATOR_EXECUTABLE NAMES glslangValidator HINTS $ENV{VULKAN_SDK}/bin NO_CMAKE_FIND_ROOT_PATH)
 message(STATUS "Found glslangValidator: ${GLSLANGVALIDATOR_EXECUTABLE}")
 
 if(OPENMP_FOUND)
@@ -155,6 +192,21 @@ if(NOT USE_SYSTEM_WEBP)
 
     include_directories(${CMAKE_SOURCE_DIR}/src/libwebp/src)
 endif()
+
+# ---- Build info ----
+# Capture build parameters at configure time so the binary can report them.
+
+execute_process(
+    COMMAND git describe --always --dirty
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_DESCRIBE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+string(TIMESTAMP BUILD_TIMESTAMP "%Y-%m-%d %H:%M:%S")
+if(NOT DEFINED PRESET_NAME)
+    set(PRESET_NAME "")
+endif()
+configure_file(cmake/build_info.h.in ${CMAKE_BINARY_DIR}/build_info.h)
 
 # ---- Subdirectories ----
 

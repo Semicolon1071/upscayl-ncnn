@@ -1,4 +1,5 @@
 #include "cli_options.h"
+#include "build_info.h"
 #include "image_utils.h"
 #include "filesystem_utils.h"
 
@@ -148,6 +149,24 @@ static void print_usage()
     fprintf(stderr, "  -x                   enable tta mode\n");
     fprintf(stderr, "  -f format            output image format (jpg/png/webp, default=ext/png)\n");
     fprintf(stderr, "  -v                   verbose output\n");
+    fprintf(stderr, "  -V                   show build info and exit\n");
+}
+
+void print_build_info()
+{
+    fprintf(stdout, "upscayl-bin build info:\n");
+    fprintf(stdout, "  preset:    %s\n", BUILD_PRESET[0] ? BUILD_PRESET : "(none)");
+    fprintf(stdout, "  type:      %s\n", BUILD_TYPE);
+    fprintf(stdout, "  compiler:  %s %s\n", BUILD_COMPILER_ID, BUILD_COMPILER_VER);
+    fprintf(stdout, "  system:    %s %s\n", BUILD_SYSTEM, BUILD_ARCH);
+    fprintf(stdout, "  git:       %s\n", BUILD_GIT_DESCRIBE[0] ? BUILD_GIT_DESCRIBE : "(unknown)");
+    fprintf(stdout, "  built:     %s\n", BUILD_TIMESTAMP);
+    if (strcmp(BUILD_ASAN, "ON") == 0)
+        fprintf(stdout, "  asan:      ON\n");
+    if (strcmp(BUILD_UBSAN, "ON") == 0)
+        fprintf(stdout, "  ubsan:     ON\n");
+    if (strcmp(BUILD_BENCHMARK, "ON") == 0)
+        fprintf(stdout, "  benchmark: ON\n");
 }
 
 static void print_resize_usage()
@@ -172,7 +191,7 @@ static void print_resize_usage()
 int parse_command_line(int argc, wchar_t **argv, CliOptions &options)
 {
     wchar_t opt;
-    while ((opt = cli_getopt(argc, argv, L"i:o:z:s:r:w:t:c:m:n:g:j:f:vxh")) != (wchar_t)-1)
+    while ((opt = cli_getopt(argc, argv, L"i:o:z:s:r:w:t:c:m:n:g:j:f:vVxh")) != (wchar_t)-1)
     {
         switch (opt)
         {
@@ -253,6 +272,9 @@ int parse_command_line(int argc, wchar_t **argv, CliOptions &options)
         case L'v':
             options.verbose = 1;
             break;
+        case L'V':
+            options.show_version = 1;
+            break;
         case L'x':
             options.tta_mode = 1;
             break;
@@ -267,7 +289,7 @@ int parse_command_line(int argc, char **argv, CliOptions &options)
 {
     int opt;
     fprintf(stderr, "🚀 Starting Upscayl - Copyright © 2024\n");
-    while ((opt = getopt(argc, argv, "i:o:z:s:r:w:t:c:m:n:g:j:f:vxh")) != -1)
+    while ((opt = getopt(argc, argv, "i:o:z:s:r:w:t:c:m:n:g:j:f:vVxh")) != -1)
     {
         switch (opt)
         {
@@ -348,6 +370,9 @@ int parse_command_line(int argc, char **argv, CliOptions &options)
         case 'v':
             options.verbose = 1;
             break;
+        case 'V':
+            options.show_version = 1;
+            break;
         case 'x':
             options.tta_mode = 1;
             break;
@@ -358,6 +383,12 @@ int parse_command_line(int argc, char **argv, CliOptions &options)
         }
     }
 #endif // _WIN32
+
+    if (options.show_version)
+    {
+        print_build_info();
+        return -1;
+    }
 
     if (options.inputpath.empty() || options.outputpath.empty())
     {

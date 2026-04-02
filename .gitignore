@@ -50,6 +50,7 @@ build
 .cache/
 .env
 logs/
+CMakeUserPresets.json
 
 *.dmg
 .DS_Store
