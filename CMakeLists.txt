@@ -154,6 +154,18 @@ if(NOT USE_SYSTEM_NCNN)
     option(NCNN_BUILD_EXAMPLES "" OFF)
     option(NCNN_DISABLE_EXCEPTION "" ON)
 
+    # Sanitizers (UBSAN vptr check) inject typeinfo references for virtual
+    # classes.  NCNN hardcodes ENABLE_RTTI=OFF for its bundled glslang, so
+    # the linker fails with "undefined reference to typeinfo for
+    # glslang::TShader".  Force RTTI/exceptions ON for all sub-projects
+    # when sanitizers are active to keep the ABI consistent.
+    if(ENABLE_ASAN OR ENABLE_UBSAN)
+        set(NCNN_DISABLE_RTTI OFF CACHE BOOL "" FORCE)
+        set(NCNN_DISABLE_EXCEPTION OFF CACHE BOOL "" FORCE)
+        set(ENABLE_RTTI ON CACHE BOOL "" FORCE)
+        set(ENABLE_EXCEPTIONS ON CACHE BOOL "" FORCE)
+    endif()
+
     add_subdirectory(src/ncnn)
 endif()
 
