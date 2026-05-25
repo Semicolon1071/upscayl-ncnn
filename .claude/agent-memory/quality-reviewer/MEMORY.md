@@ -1,0 +1,1 @@
+- [Codebase notes](project_codebase_notes.md) — Key quality issues and architecture observations from first full review (2026-03-28)
